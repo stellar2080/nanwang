@@ -14,6 +14,9 @@ from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 from modelscope import AutoTokenizer, AutoModel
 import torch
+from PyPDF2 import PdfReader, PdfWriter
+import tempfile
+from PIL import Image
 
 NEO4J_URI = "neo4j://localhost://7474"
 NEO4J_AUTH = ("neo4j", "12345678")
@@ -43,10 +46,31 @@ def image_to_base64_from_pil(image):
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-def pdf_to_base64_images(pdf_path):
-    images = convert_from_path(pdf_path)
-    base64_images = [image_to_base64_from_pil(img) for img in images]
-    print(f"转换完成，共转换了 {len(base64_images)} 张图片")
+def pdf_to_base64_images_by_batch(pdf_path, start_page=0, end_page=None, batch_size=30):
+    reader = PdfReader(pdf_path)
+    total_pages = len(reader.pages)
+    if end_page is None:
+        end_page = total_pages
+    base64_images = []
+
+    for i in range(start_page, end_page, batch_size):
+        batch_writer = PdfWriter()
+
+        for j in range(i, min(i + batch_size, end_page)):
+            batch_writer.add_page(reader.pages[j])
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+            batch_writer.write(tmp_pdf)
+            tmp_pdf_path = tmp_pdf.name
+
+        images = convert_from_path(tmp_pdf_path,dpi=300)
+        for img in images:
+            base64_images.append(image_to_base64_from_pil(img))
+
+        print(f"已转换 {min(i + batch_size, end_page)} / {end_page} 页")
+
+        os.remove(tmp_pdf_path)
+
     return base64_images
 
 def vl_chat_from_path(image_path, prompt):
@@ -271,7 +295,6 @@ def chunk_rows(rows):
 
     return chunks
 
-
 def convert_chunks_to_markdown(chunks):
     markdown_list = []
     for chunk in chunks:
@@ -379,7 +402,7 @@ def embedding_by_local(input):
     return sentence_embeddings.tolist()
 
 def process_tables_for_user_input(json_path,pdf_path):
-    base64_page_images = pdf_to_base64_images(pdf_path)
+    base64_page_images = pdf_to_base64_images_by_batch(pdf_path)
     with open(json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     tables_list = []
@@ -415,44 +438,144 @@ def process_tables_for_user_input(json_path,pdf_path):
 
     return tables_list
 
-def process_tables(json_path,pdf_path):
+def pad_image_to_height(img, target_height, fill_color=(255, 255, 255)):
+    w, h = img.size
+    if h >= target_height:
+        return img
+    pad_top = (target_height - h) // 2
+    pad_bottom = target_height - h - pad_top
+    new_img = Image.new(img.mode, (w, target_height), fill_color)
+    new_img.paste(img, (0, pad_top))
+    return new_img
+
+def proc_bbox(bbox,image_x_size):
+    bbox[0] = 0
+    bbox[1] -= 5
+    bbox[2] = image_x_size
+    bbox[3] += 5
+    return bbox
+
+def crop_images_from_pdfreader(middle_data: list, reader: PdfReader, page_item_idxs: dict):
+    batch_writer = PdfWriter()
+    bboxs = []
+    table_images = []
+    for page_idx, item_idxs in page_item_idxs.items():
+        page_bboxs = []
+        for item_idx in item_idxs:
+            page_bboxs.append(middle_data[page_idx]['para_blocks'][item_idx]['bbox'])
+        bboxs.append(page_bboxs)
+        batch_writer.add_page(reader.pages[page_idx])
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+        batch_writer.write(tmp_pdf)
+        tmp_pdf_path = tmp_pdf.name
+
+    images = convert_from_path(tmp_pdf_path, dpi=72)
+
+    for i, image in enumerate(images):
+        for bbox in bboxs[i]:
+            bbox = proc_bbox(bbox,image.size[0])
+            table_image = image.crop(bbox)
+            table_images.append(table_image)
+
+    return table_images
+
+def merge_images_horizonally(image1,image2):
+    max_height = max(image1.height, image2.height)
+
+    if image1.height < max_height:
+        image1 = pad_image_to_height(image1, max_height)
+    if image2.height < max_height:
+        image2 = pad_image_to_height(image2, max_height)
+
+    total_width = image1.width + image2.width
+    merged_image = Image.new("RGB", (total_width, max_height), (255, 255, 255))
+    merged_image.paste(image1, (0, 0))
+    merged_image.paste(image2, (image1.width, 0))
+
+    return merged_image
+
+def contains_any(text, substrings):
+    if isinstance(substrings, str):
+        substrings = [substrings]
+    return any(sub in text for sub in substrings)
+
+def process_tables(content_list_path,middle_json_path,pdf_path,key_word=None):
+    with open(content_list_path, 'r', encoding='utf-8') as f:
+        content_list_data = json.load(f)
+    with open(middle_json_path, 'r', encoding='utf-8') as f:
+        middle_data = json.load(f)
     pdf_path = os.path.abspath(pdf_path)
-    base64_page_images = pdf_to_base64_images(pdf_path)
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
     tables_list = []
     pending_table = None
-    for item in data:
-        if item["type"] == "table":
-            item['table_id'] = str(uuid.uuid4())
-            item['pdf_path'] = pdf_path
-            table_caption = item.get("table_caption")
-            if table_caption:  
+    if key_word is None:
+        base64_page_images = pdf_to_base64_images_by_batch(pdf_path)
+        for item in content_list_data:
+            if item["type"] == "table":
+                item['table_id'] = str(uuid.uuid4())
+                item['pdf_path'] = pdf_path
+                table_caption = item.get("table_caption")
+                if table_caption:  
+                    if pending_table:
+                        tables_list.append(pending_table)
+                    pending_table = [item]
+                else:  
+                    if pending_table:
+                        pending_table.append(item)
+                    else:
+                        table_body = item['table_body']
+                        page_idx = item['page_idx']
+                        response = vl_chat(base64_page_images[page_idx], vl_chat_template.format(table_body))
+                        json_data = parse_json(response)
+                        item['table_caption'] = [json_data['name']]
+                        pending_table = [item]
+            elif item["type"] == "text":
                 if pending_table:
                     tables_list.append(pending_table)
-                pending_table = [item]
-            else:  
-                if pending_table:
-                    pending_table.append(item)
-                else:
-                    table_body = item['table_body']
-                    page_idx = item['page_idx']
-                    response = vl_chat(base64_page_images[page_idx], vl_chat_template.format(table_body))
-                    json_data = parse_json(response)
-                    item['table_caption'] = [json_data['name']]
-                    pending_table = [item]
-        elif item["type"] == "text":
-            if pending_table:
-                tables_list.append(pending_table)
-                pending_table = None
+                    pending_table = None
 
-    if pending_table:
-        tables_list.append(pending_table)
+        if pending_table:
+            tables_list.append(pending_table)
+    else:
+        text_caption = None
+        text_flag = False
+        for item in content_list_data:
+            if item["type"] == "table":
+                table_caption = item.get("table_caption")
+                if table_caption:
+                    if pending_table:
+                        tables_list.append(pending_table)
+                        pending_table = None
+                    if contains_any(str(table_caption),key_word):
+                        item['table_id'] = str(uuid.uuid4())
+                        item['pdf_path'] = pdf_path
+                        pending_table = [item]
+                else:  
+                    if pending_table:
+                        item['table_id'] = str(uuid.uuid4())
+                        item['pdf_path'] = pdf_path
+                        pending_table.append(item)
+                    elif text_flag is True:
+                        item['table_id'] = str(uuid.uuid4())
+                        item['pdf_path'] = pdf_path
+                        item['table_caption'] = [text_caption]
+                        pending_table = [item]
+                        text_flag = False
+            elif item["type"] == "text":
+                if pending_table:
+                    tables_list.append(pending_table)
+                    pending_table = None
+                item_text = item['text']
+                if contains_any(item_text,key_word):
+                    text_flag = True
+                    text_caption = item['text']
+        
+        if pending_table:
+            tables_list.append(pending_table)
 
     return tables_list
 
-def process_ocr_data(json_path, pdf_path):
-    tables_list = process_tables(json_path,pdf_path)
+def process_ocr_data(json_path, pdf_path, key_word):
+    tables_list = process_tables(json_path,pdf_path,key_word=key_word)
     for tables in tables_list:
         create_nodes(NEO4J_URI, NEO4J_AUTH,table_data=tables)
         for i, table in enumerate(tables):
@@ -505,7 +628,7 @@ def search_by_text(input, doc_type='caption', top_k=1):
         print('知识图谱检索结果：')
         print('pdf文件路径：\n',pdf_path)
         print('pdf页码：\n',page_idx_list)
-        page_images = convert_from_path(pdf_path)
+        page_images = convert_from_path(pdf_path,dpi=300)
         results.append([])
         for page_idx in page_idx_list:
             results[i].append(page_images[page_idx])
@@ -516,15 +639,36 @@ if __name__ == "__main__":
     # drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
     # create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
     # clear_graph(NEO4J_URI, NEO4J_AUTH)
-    # process_ocr_data('./output/1/auto/1_content_list.json','./pdfs/1.pdf')
-    input = ['投标人技术偏差']
-    results = search_by_text(input,'caption',1)
-    for result in results:
-        for image in result:
-            plt.imshow(image)
-            plt.axis('off')
-            plt.show()
-    
+    # process_ocr_data('./output/江苏华鹏投标技术文件_content_list.json','./pdfs/江苏华鹏投标技术文件.pdf',key_word=['设备外部条件一览表','工程概况一览表'])
+    # input = '工程概况一览表'
+    # results = search_by_text(input,'caption',1)
+    # for result in results:
+    #     for image in result:
+    #         plt.imshow(image)
+    #         plt.axis('off')
+    #         plt.show()
     # tables_list = process_tables_for_user_input('./output/投标文件/auto/投标文件_content_list.json','./pdfs/投标文件.pdf')
     # for tables in tables_list:
     #     print(tables)
+
+    
+
+    with open('./output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json', 'r', encoding='utf-8') as f:
+        middle_data = json.load(f)
+
+    reader = PdfReader('./pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf')
+
+    page_item_idxs = {
+        2:[3],
+        3:[2]
+    }
+
+    table_images = crop_images_from_pdfreader(middle_data, reader, page_item_idxs)
+
+    for image in table_images:
+        plt.imshow(image)
+        plt.axis('off')
+        plt.show()
+
+    merge_image = merge_images_horizonally(table_images[0], table_images[1])
+    merge_image.save('merged.png')

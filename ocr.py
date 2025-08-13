@@ -157,7 +157,7 @@ def do_parse(
 
             logger.info(f"local output dir is {local_md_dir}")
             
-    return content_list
+    return content_list, pdf_info
 
 def parse_doc_streaming_batch(
         path_list: list[Path],
@@ -172,8 +172,10 @@ def parse_doc_streaming_batch(
 ):
     try:
         content_dict = {}
+        pdf_info_dict = {}
         for path in path_list:
             content_list = []
+            pdf_info_list = []
             file_name = str(Path(path).stem)
             reader = PdfReader(str(path))
             total_pages = len(reader.pages)
@@ -196,7 +198,7 @@ def parse_doc_streaming_batch(
                     batch_bytes = buf.getvalue()
 
                 pdf_file_name = f"{file_name}_p{batch_start}-{batch_end - 1}"
-                result = do_parse(
+                content_list_result, pdf_info_result = do_parse(
                     output_dir=output_dir,
                     pdf_file_names=[pdf_file_name],
                     pdf_bytes_list=[batch_bytes],
@@ -207,14 +209,16 @@ def parse_doc_streaming_batch(
                     start_page_id=0,
                     end_page_id=batch_end - 1 - batch_start 
                 )
-                for item in result:
+                for item in content_list_result:
                     item['page_idx'] = item['page_idx'] + batch_size * cnt
-                content_list.extend(result)
+                content_list.extend(content_list_result)
+                pdf_info_list.extend(pdf_info_result)
                 cnt += 1
 
             content_dict[file_name] = content_list
+            pdf_info_dict[file_name] = pdf_info_list
 
-        return content_dict          
+        return content_dict, pdf_info_dict          
     except Exception as e:
         logger.exception(e)
 
@@ -235,7 +239,7 @@ if __name__ == '__main__':
     backend = "pipeline"
     method = "auto"
     batch_size = 30
-    content_dict = parse_doc_streaming_batch(
+    content_dict, pdf_info_dict = parse_doc_streaming_batch(
         doc_path_list, output_dir, backend=backend, method=method, batch_size=batch_size
     )
 
@@ -247,4 +251,6 @@ if __name__ == '__main__':
     for file_name, content_list in content_dict.items():
         with open(os.path.join(output_dir,file_name + "_content_list.json"), "w", encoding="utf-8") as f:
             json.dump(content_list, f, ensure_ascii=False, indent=4)
+        with open(os.path.join(output_dir,file_name + "_middle.json"), "w", encoding="utf-8") as f:
+            json.dump(pdf_info_dict[file_name], f, ensure_ascii=False, indent=4)
     
