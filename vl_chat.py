@@ -25,7 +25,7 @@ MILVUS_URI = "http://localhost:19530"
 MILVUS_DB_NAME = 'default'
 SILICONFLOW_API_KEY = 'sk-lfgwvzyqxmwxtomwdqqjbdlvibfdrravglobjhiuvnqnfwyx'
 
-vl_chat_template = """
+template_for_tablename_identify = """
 你是一个表格分析专家。你将看到一张图片和该图片中某一个表格的OCR识别结果。
 请你结合图像内容和OCR识别结果，从图片中识别该表格的可能性最大的表名。表名通常位于表格上方，可能以“表x.x”、标题文字或其他描述形式出现。
 OCR识别结果如下：
@@ -34,6 +34,20 @@ OCR识别结果如下：
 ```json
 {{
     "name": ""
+}}
+"""
+
+template_for_table_ = """
+你是一个表格分析专家。你将看到一张含有两个表格的图片。
+请遵从以下规则判断这两个表格是同一个表格的不同部分，还是两个独立的表格。
+1. 列名是否一致
+2. 列数，列宽是否一致
+3. 序号是否连贯
+4. 内容是否有衔接性
+最后按照以下格式输出，1表示是同一个表格的不同部分，0表示是独立的表格：
+```json
+{{
+    "type": 1
 }}
 """
 
@@ -401,49 +415,11 @@ def embedding_by_local(input):
     sentence_embeddings = torch.nn.functional.normalize(sentence_embeddings, p=2, dim=1)
     return sentence_embeddings.tolist()
 
-def process_tables_for_user_input(json_path,pdf_path):
-    base64_page_images = pdf_to_base64_images_by_batch(pdf_path)
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    tables_list = []
-    pending_table = None
-    keys_to_keep = {'table_caption','table_body'}
-    for item in data:
-        if item["type"] == "table":
-            table_caption = item.get("table_caption")
-            if table_caption:  
-                if pending_table:
-                    tables_list.append(pending_table)
-                new_dict = {k: v for k, v in item.items() if k in keys_to_keep}
-                pending_table = [new_dict]
-            else:  
-                if pending_table:
-                    new_dict = {k: v for k, v in item.items() if k in keys_to_keep}
-                    pending_table.append(new_dict)
-                else:
-                    table_body = item['table_body']
-                    page_idx = item['page_idx']
-                    response = vl_chat(base64_page_images[page_idx], vl_chat_template.format(table_body))
-                    json_data = parse_json(response)
-                    item['table_caption'] = [json_data['name']]
-                    new_dict = {k: v for k, v in item.items() if k in keys_to_keep}
-                    pending_table = [new_dict]
-        elif item["type"] == "text":
-            if pending_table:
-                tables_list.append(pending_table)
-                pending_table = None
-
-    if pending_table:
-        tables_list.append(pending_table)
-
-    return tables_list
-
 def pad_image_to_height(img, target_height, fill_color=(255, 255, 255)):
     w, h = img.size
     if h >= target_height:
         return img
     pad_top = (target_height - h) // 2
-    pad_bottom = target_height - h - pad_top
     new_img = Image.new(img.mode, (w, target_height), fill_color)
     new_img.paste(img, (0, pad_top))
     return new_img
@@ -507,40 +483,13 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word=None):
     pdf_path = os.path.abspath(pdf_path)
     tables_list = []
     pending_table = None
-    if key_word is None:
-        base64_page_images = pdf_to_base64_images_by_batch(pdf_path)
-        for item in content_list_data:
-            if item["type"] == "table":
-                item['table_id'] = str(uuid.uuid4())
-                item['pdf_path'] = pdf_path
-                table_caption = item.get("table_caption")
-                if table_caption:  
-                    if pending_table:
-                        tables_list.append(pending_table)
-                    pending_table = [item]
-                else:  
-                    if pending_table:
-                        pending_table.append(item)
-                    else:
-                        table_body = item['table_body']
-                        page_idx = item['page_idx']
-                        response = vl_chat(base64_page_images[page_idx], vl_chat_template.format(table_body))
-                        json_data = parse_json(response)
-                        item['table_caption'] = [json_data['name']]
-                        pending_table = [item]
-            elif item["type"] == "text":
-                if pending_table:
-                    tables_list.append(pending_table)
-                    pending_table = None
-
-        if pending_table:
-            tables_list.append(pending_table)
-    else:
-        text_caption = None
-        text_flag = False
-        for item in content_list_data:
-            if item["type"] == "table":
-                table_caption = item.get("table_caption")
+    pending = False
+    text_caption = None
+    for item in content_list_data:
+        if item["type"] == "table":
+            if pending_table:
+                
+                
                 if table_caption:
                     if pending_table:
                         tables_list.append(pending_table)
@@ -560,18 +509,25 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word=None):
                         item['table_caption'] = [text_caption]
                         pending_table = [item]
                         text_flag = False
-            elif item["type"] == "text":
-                if pending_table:
-                    tables_list.append(pending_table)
-                    pending_table = None
+            else:
+                
+        elif item["type"] == "text":
+            if pending:
                 item_text = item['text']
                 if contains_any(item_text,key_word):
-                    text_flag = True
+                    pending = True
                     text_caption = item['text']
-        
-        if pending_table:
-            tables_list.append(pending_table)
-
+                tables_list.append(pending_table)
+                pending_table = None
+            else:
+                item_text = item['text']
+                if contains_any(item_text,key_word):
+                    pending = True
+                    text_caption = item['text']
+            
+    if pending_table:
+        tables_list.append(pending_table)
+   
     return tables_list
 
 def process_ocr_data(json_path, pdf_path, key_word):
