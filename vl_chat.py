@@ -444,11 +444,14 @@ def crop_images_from_pdfreader(middle_data: list, reader: PdfReader, idx_data: l
         batch_writer.write(tmp_pdf)
         tmp_pdf_path = tmp_pdf.name
 
-    images = convert_from_path(tmp_pdf_path, dpi=72)
+    images = convert_from_path(tmp_pdf_path, dpi=300)
 
     for i, image in enumerate(images):
-        bbox = proc_bbox(bboxs[i],image.size[0])
-        table_image = image.crop(bbox)
+        bbox = bboxs[i]
+        scale = 300 / 72
+        scale_bbox = [int(x * scale) for x in bbox]
+        scale_bbox = proc_bbox(scale_bbox,image.size[0])
+        table_image = image.crop(scale_bbox)
         table_images.append(table_image)
 
     return table_images
@@ -613,7 +616,12 @@ if __name__ == "__main__":
     # drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
     # create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
     # clear_graph(NEO4J_URI, NEO4J_AUTH)
-    # process_ocr_data('./output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json','./output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json','./pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',key_word=['供货范围及设备技术规格一览表'])
+    # process_ocr_data(
+    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
+    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
+    #     './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
+    #     key_word=['供货范围及设备技术规格一览表']
+    # )
     # input = '工程概况一览表'
     # results = search_by_text(input,'caption',1)
     # for result in results:
@@ -622,18 +630,38 @@ if __name__ == "__main__":
     #         plt.axis('off')
     #         plt.show()
 
-    idx_data = [(2, 3), (3, 2), (4, 2), (5, 0), (6, 1), (7, 0), (8, 0)]
-    with open('./output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json', 'r', encoding='utf-8') as f:
+    # content_list_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_content_list.json'
+    # middle_json_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_middle.json'
+    # pdf_path = './pdfs/9、500kV组合电器-河南平芝1_投标技术文件.pdf'
+    content_list_path = './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json'
+    middle_json_path = './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json'
+    pdf_path = './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf'
+    with open(content_list_path, 'r', encoding='utf-8') as f:
+        content_list_data = json.load(f)
+    with open(middle_json_path, 'r', encoding='utf-8') as f:
         middle_data = json.load(f)
+    pdf_path = os.path.abspath(pdf_path)
+    reader = PdfReader(pdf_path)
 
-    reader = PdfReader('./pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf')
+    idx_data = []
+    page_idx_now = 0
+    item_idx = 0
+    for item in content_list_data:
+        print('='*30)
+        print('当前item信息:')
+        print(item)
+        page_idx = item['page_idx']
+        if page_idx_now != page_idx:
+            page_idx_now = page_idx
+            item_idx = 0 
+        if item["type"] == "table": 
+            idx_data.append((page_idx,item_idx))
+            print('当前idx_data信息:')
+            print(idx_data)
+        item_idx += 1
 
-    table_images = crop_images_from_pdfreader(middle_data, reader, idx_data[0:2])
-
+    table_images = crop_images_from_pdfreader(middle_data, reader, idx_data)
+    if not os.path.exists('./images'):
+        os.mkdir('./images')
     for idx, image in enumerate(table_images):
-        plt.imshow(image)
-        plt.show()
-        image.save('image_{}.png'.format(idx))
-
-    merge_image = merge_images_horizonally(table_images[0], table_images[1])
-    merge_image.save('merged.png')
+        image.save(os.path.join('images','楚庭站_'+str(idx)+'.jpg'))
