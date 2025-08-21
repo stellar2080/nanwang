@@ -40,6 +40,7 @@ OCR识别结果如下：
 {{
     "name": ""
 }}
+```
 """
 
 template_for_table_recognize = """
@@ -57,6 +58,7 @@ template_for_table_recognize = """
 {{
     "type": 1
 }}
+```
 """
 
 def image_to_base64_from_path(image_path):
@@ -428,14 +430,20 @@ def pad_image_to_height(img, target_height, fill_color=(255, 255, 255)):
     new_img.paste(img, (0, pad_top))
     return new_img
 
-def proc_bbox(bbox: list,image_x_size):
-    bbox[0] = 0
-    bbox[1] -= 60
-    bbox[2] = image_x_size
-    bbox[3] += 60
+def proc_bbox(bbox: list,image_x_size,mode: int):
+    if mode == 0:
+        bbox[0] = 0
+        bbox[1] = 0
+        bbox[2] = image_x_size
+        bbox[3] += 60
+    elif mode == 1:
+        bbox[0] = 0
+        bbox[1] -= 60
+        bbox[2] = image_x_size
+        bbox[3] += 60
     return bbox
 
-def crop_images_from_pdfreader(reader: PdfReader, bboxs: list):
+def crop_images_from_pdfreader(reader: PdfReader, bboxs: list, mode: int = 1):
     batch_writer = PdfWriter()
     table_images = []
     for item in bboxs:
@@ -451,7 +459,7 @@ def crop_images_from_pdfreader(reader: PdfReader, bboxs: list):
     for i, image in enumerate(images):
         bbox = bboxs[i][1]
         bbox = [int(x * scale) for x in bbox]
-        bbox = proc_bbox(bbox,image.size[0])
+        bbox = proc_bbox(bbox,image.size[0],mode)
         table_image = image.crop(bbox)
         table_images.append(table_image)
 
@@ -508,7 +516,7 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
                 print('pending_table不为空.')
                 print('截取pdf中表格.')
                 bboxs = get_bboxs(middle_data, idx_data[-2:])
-                table_images = crop_images_from_pdfreader(reader, bboxs)
+                table_images = crop_images_from_pdfreader(reader, bboxs, mode=1)
                 # for image in table_images:
                 #     plt.imshow(image)
                 #     plt.axis('off')
@@ -530,7 +538,13 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
                 elif json_res['type'] == 0:
                     tables_list.append(pending_table)
                     pending_table = None
-                    base64_image = pdf_to_base64_images_by_batch(reader, item['page_idx'], item['page_idx']+1)[0]
+
+                    table_images = crop_images_from_pdfreader(reader, bboxs[-1:],mode=0)
+                    table_image = table_images[-1]
+                    # plt.imshow(table_image)
+                    # plt.axis('off')
+                    # plt.show()
+                    base64_image = image_to_base64_from_pil(table_image)
                     content = vl_chat(base64_image,prompt=template_for_tablename_identify.format(item['table_body'],key_word))
                     print('大模型回答：\n',content)
                     json_res = parse_json(content)
@@ -543,13 +557,18 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
                         pending_table = [item]
             else:
                 print('pending_table为空.')
-                base64_image = pdf_to_base64_images_by_batch(reader, item['page_idx'], item['page_idx']+1)[0]
+                bboxs = get_bboxs(middle_data, idx_data[-1:])
+                table_images = crop_images_from_pdfreader(reader, bboxs[-1:], mode=0)
+                table_image = table_images[-1]
+                # plt.imshow(table_image)
+                # plt.axis('off')
+                # plt.show()
+                base64_image = image_to_base64_from_pil(table_image)
                 content = vl_chat(base64_image,prompt=template_for_tablename_identify.format(item['table_body'],key_word))
                 print('大模型回答：\n',content)
                 json_res = parse_json(content)
                 if json_res['name']:
                     print('识别表名为:',json_res['name'])
-                    bboxs = get_bboxs(middle_data, idx_data[-1:])
                     bbox = bboxs[-1][1]
                     item['table_id'] = str(uuid.uuid4())
                     item['pdf_path'] = pdf_path
@@ -620,28 +639,29 @@ def search_by_text(input, doc_type='caption', top_k=1):
         print('pdf文件路径：\n',pdf_path)
         print('bbox信息：\n',bboxs)
         pdfreader = PdfReader(pdf_path)
-        images = crop_images_from_pdfreader(pdfreader, bboxs)
+        images = crop_images_from_pdfreader(pdfreader, bboxs, mode=1)
         result.append(images)
     
     return result
 
 if __name__ == "__main__":
-    # drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
-    # create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
-    # clear_graph(NEO4J_URI, NEO4J_AUTH)
-    # process_ocr_data(
-    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
-    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
-    #     './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
-    #     key_word=['供货范围及设备技术规格一览表']
-    # )
-    input = ['供货范围及设备技术规格一览表','工程概况一览表']
-    result = search_by_text(input,'caption')
-    for images in result:
-        for image in images:
-            plt.imshow(image)
-            plt.axis('off')
-            plt.show()
+    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
+    create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
+    clear_graph(NEO4J_URI, NEO4J_AUTH)
+    process_ocr_data(
+        './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
+        './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
+        './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
+        key_word=['供货范围及设备技术规格一览表']
+    )
+    # input = ['供货范围及设备技术规格一览表','工程概况一览表']
+    # result = search_by_text(input,'caption')
+    # for images in result:
+    #     for image in images:
+    #         plt.imshow(image)
+    #         plt.axis('off')
+    #         plt.show()
+
 
     # content_list_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_content_list.json'
     # middle_json_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_middle.json'
@@ -657,7 +677,6 @@ if __name__ == "__main__":
     #     middle_data = json.load(f)
     # pdf_path = os.path.abspath(pdf_path)
     # reader = PdfReader(pdf_path)
-
     # idx_data = []
     # page_idx_now = 0
     # item_idx = 0
@@ -674,16 +693,22 @@ if __name__ == "__main__":
     #         print('当前idx_data信息:')
     #         print(idx_data)
     #     item_idx += 1
-
-    # table_images = crop_images_from_pdfreader(middle_data, reader, idx_data)
+    # table_images = crop_images_from_pdfreader(middle_data, reader, idx_data, mode=1)
     # if not os.path.exists('./images'):
     #     os.mkdir('./images')
     # for idx, image in enumerate(table_images):
     #     if idx > 10:
     #         break
     #     image.save(os.path.join('images',image_name+str(idx)+'.jpg'))
-
     # img = Image.open('./images/楚庭站_6.jpg')
     # img1 = Image.open('./images/河南平芝_10.jpg')
     # merge_img = merge_images_horizonally(img,img1)
     # merge_img.save('merge4.jpg')
+
+
+    # content_list_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_content_list.json'
+    # with open(content_list_path, 'r', encoding='utf-8') as f:
+    #     content_list_data = json.load(f)
+    # for item in content_list_data:
+    #     if item['type'] == 'table':
+            
