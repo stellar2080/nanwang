@@ -27,13 +27,27 @@ SILICONFLOW_API_KEY = 'sk-lfgwvzyqxmwxtomwdqqjbdlvibfdrravglobjhiuvnqnfwyx'
 TONGYI_API_KEY = 'sk-9536a97947b641ad9e287da238ba3abb'
 PDF_DPI = 300
 
-template_for_tablename_identify = """
+template_for_tablename_compare = """
 你是一个表格分析专家。你将看到一张图片和该图片中某一个表格的OCR识别结果。
 请你结合图像内容和OCR识别结果，识别该表的表名是否为"表名参考"的其中之一。如果是，请输出表名，表名要和"表名参考"中的表名一致，如果不是，则留空。
 提示：表名通常位于表格上方，可能以“表x.x”、标题文字或其他描述形式出现。
 OCR识别结果如下：
 {}
 表名参考：
+{}
+最后按照以下格式输出：
+```json
+{{
+    "name": ""
+}}
+```
+"""
+
+template_for_tablename_identify = """
+你是一个表格分析专家。你将看到一张图片和该图片中某一个表格的OCR识别结果。
+请你结合图像内容和OCR识别结果，识别该表的可能性最大的表名。
+提示：表名通常位于表格上方，可能以“表x.x”、标题文字或其他描述形式出现。
+OCR识别结果如下：
 {}
 最后按照以下格式输出：
 ```json
@@ -394,6 +408,19 @@ def search_collection(uri, db_name, collection_name, query_vector, filter_type, 
     )
     return res
 
+def query_collection(uri, db_name, collection_name, filter_type):
+    client = MilvusClient(
+        uri=uri,
+        token="root:Milvus",
+        db_name=db_name
+    )
+    res = client.query(
+        collection_name=collection_name,
+        filter=f'type == "{filter_type}"',
+        output_fields=["table_id", "type", "document"]
+    )
+    return res
+
 def embedding_by_api(input):
     url = "https://api.siliconflow.cn/v1/embeddings"
     payload = {
@@ -545,7 +572,7 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
                     # plt.axis('off')
                     # plt.show()
                     base64_image = image_to_base64_from_pil(table_image)
-                    content = vl_chat(base64_image,prompt=template_for_tablename_identify.format(item['table_body'],key_word))
+                    content = vl_chat(base64_image,prompt=template_for_tablename_compare.format(item['table_body'],key_word))
                     print('大模型回答：\n',content)
                     json_res = parse_json(content)
                     if json_res['name']:
@@ -564,7 +591,7 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
                 # plt.axis('off')
                 # plt.show()
                 base64_image = image_to_base64_from_pil(table_image)
-                content = vl_chat(base64_image,prompt=template_for_tablename_identify.format(item['table_body'],key_word))
+                content = vl_chat(base64_image,prompt=template_for_tablename_compare.format(item['table_body'],key_word))
                 print('大模型回答：\n',content)
                 json_res = parse_json(content)
                 if json_res['name']:
@@ -652,9 +679,9 @@ if __name__ == "__main__":
         './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
         './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
         './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
-        key_word=['供货范围及设备技术规格一览表']
+        key_word=['工程概况一览表']
     )
-    # input = ['供货范围及设备技术规格一览表','工程概况一览表']
+    # input = ['工程概况一览表']
     # result = search_by_text(input,'caption')
     # for images in result:
     #     for image in images:
@@ -705,10 +732,58 @@ if __name__ == "__main__":
     # merge_img = merge_images_horizonally(img,img1)
     # merge_img.save('merge4.jpg')
 
+    # res = query_collection(MILVUS_URI,MILVUS_DB_NAME,'tables','caption')
+    # caption_list = []
+    # for item in res:
+    #     caption_list.append(item['document'])
+    # print(caption_list)
 
+    # middle_json_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_middle.json'
     # content_list_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_content_list.json'
+    # pdf_path = './pdfs/9、500kV组合电器-河南平芝1_投标技术文件.pdf'
     # with open(content_list_path, 'r', encoding='utf-8') as f:
     #     content_list_data = json.load(f)
+    # with open(middle_json_path, 'r', encoding='utf-8') as f:
+    #     middle_data = json.load(f)
+    
+    # idx_data = []
+    # reader = PdfReader(pdf_path)
     # for item in content_list_data:
-    #     if item['type'] == 'table':
-            
+    #     print('='*30)
+    #     print('当前item信息:')
+    #     print(item)
+    #     page_idx = item['page_idx']
+    #     if page_idx_now != page_idx:
+    #         page_idx_now = page_idx
+    #         item_idx = 0 
+    #     if item["type"] == "table": 
+    #         idx_data.append((page_idx,item_idx))
+    #         print('当前idx_data信息:')
+    #         print(idx_data)
+
+    #         bboxs = get_bboxs(middle_data, idx_data[-1:])
+    #         table_images = crop_images_from_pdfreader(reader, bboxs[-1:],mode=0)
+    #         table_image = table_images[-1]
+    #         plt.imshow(table_image)
+    #         plt.axis('off')
+    #         plt.show()
+    #         base64_image = image_to_base64_from_pil(table_image)
+    #         content = vl_chat(base64_image,prompt=template_for_tablename_compare.format(item['table_body'],caption_list))
+    #         print('大模型回答：\n',content)
+    #         json_res = parse_json(content)
+    #         if json_res['name']:
+    #             table_name = json_res['name']
+    #             print('识别表名为:',table_name)
+    #             table_body = item['table_body']
+    #             rows = html_to_rows(table_body)
+    #             chunked_rows = chunk_rows(rows)
+    #             markdown_chunks = convert_chunks_to_markdown(chunked_rows)
+    #             markdown_chunks.insert(0,table_name)
+    #             embeddings = embedding_by_api(markdown_chunks)
+    #             res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',embeddings[0],'caption',top_k=50000)
+    #             print(res)
+    #     item_idx += 1
+
+    # embeddings = embedding_by_api(['供货范围及设备技术规格一览表'])
+    # res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',embeddings,'caption',top_k=50000)
+    # print(res)
