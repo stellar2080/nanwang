@@ -237,10 +237,9 @@ if __name__ == '__main__':
 
     """Use pipeline mode if your environment does not support VLM"""
     backend = "pipeline"
-    method = "auto"
     batch_size = 30
     content_dict, pdf_info_dict = parse_doc_streaming_batch(
-        doc_path_list, output_dir, backend=backend, method=method, batch_size=batch_size
+        doc_path_list, output_dir, backend=backend, batch_size=batch_size
     )
 
     # To enable VLM mode, change the backend to 'vlm-xxx'

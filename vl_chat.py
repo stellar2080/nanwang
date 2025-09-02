@@ -27,53 +27,115 @@ SILICONFLOW_API_KEY = 'sk-lfgwvzyqxmwxtomwdqqjbdlvibfdrravglobjhiuvnqnfwyx'
 TONGYI_API_KEY = 'sk-9536a97947b641ad9e287da238ba3abb'
 PDF_DPI = 300
 
-template_for_tablename_compare = """
+template_for_tablename_extraction = """
 你是一个表格分析专家。你将看到一张图片和该图片中某一个表格的OCR识别结果。
-请你结合图像内容和OCR识别结果，识别该表的表名是否为"表名参考"的其中之一。如果是，请输出表名，表名要和"表名参考"中的表名一致，如果不是，则留空。
-提示：表名通常位于表格上方，可能以“表x.x”、标题文字或其他描述形式出现。
-OCR识别结果如下：
+你的任务是结合图像内容和OCR识别结果，识别该表可能性最大的表名。
+【OCR识别结果】
 {}
-表名参考：
-{}
-最后按照以下格式输出：
-```json
+【任务要求】
+1.表名通常位于表格上方，可能以以下形式出现：
+- 表格编号与名称组合形式，如“表x.x 统计表”或“表x-x 信息表”
+- 带章节编号的标题，如“1.1 xxx表”、“3.2 数据统计表”
+- 纯文字标题，如“汇总表”、“概况一览表”等
+2.若存在多个候选表名，请选择位置最贴近表格且结构最符合上述形式的一项
+3.注意排除页眉、页脚、段落正文、图注等干扰信息。
+【输出要求】
+请严格按以下格式输出识别到的可能性最大的表名，绝对不允许留空：
 {{
-    "name": ""
+    "name": "识别到的表名"
 }}
-```
 """
 
-template_for_tablename_identify = """
-你是一个表格分析专家。你将看到一张图片和该图片中某一个表格的OCR识别结果。
-请你结合图像内容和OCR识别结果，识别该表的可能性最大的表名。
-提示：表名通常位于表格上方，可能以“表x.x”、标题文字或其他描述形式出现。
-OCR识别结果如下：
-{}
-最后按照以下格式输出：
-```json
-{{
-    "name": ""
-}}
-```
-"""
+template_for_table_firstrow_classification = '''
+你是一个表格分析专家，你将看到一张包含两个表格的图像。
+你的任务是根据【判断规则】分别判断两个表格的首行是否为列名行
+【判断规则】
+1.如果表格有标题，不要把标题误认为是首行内容
+2.只能根据首行原始文本进行判断，禁止解释、拆解、补充或推理首行内容含义
+3.列名行：用于标识表格列含义的标题行，通常包含以下类型的词语：
+    - 示例：序号、名称、项目、参数、数量、单位、条件、备注、类型、值、类别
+    - 示例完整行：
+      - "序号 | 名称 | 数量"
+      - "参数 | 单位 | 正常使用条件 | 特殊使用条件"
+      - "项目 | 类型 | 备注"
+4.非列名行：不是列标题，而是数据行、说明行或数值行，通常不具备抽象的列标题性质。
+    - 示例：序号值、具体值、数字、时间、公司名、设备型号，而不是抽象的列概念
+    - 示例完整行：
+      - "1.1 | 电动机 | 2台"
+      - "2.3.1 |实操培训时长（天）|10|10"
+      - "环境温度 | 25℃"
+      - "2024年7月 | XX公司"
+5.强制规则：
+    - 如果首行第一个单元格是具体的编号值（例如纯数字、罗马数字、带小数点的序号，如“1”“1.1”“1.2.3.4”“一”），则必定为非列名行。
+【输出要求】
+请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+- 如果两个表格的首行都是列名行:
+{
+    "both_are_headers": true
+}
+- 如果至少有一个表格首行不是列名行，输出:
+{
+    "both_are_headers": false
+}
+'''
 
-template_for_table_recognize = """
-你是一个表格分析专家。你将看到一张含有两个表格的图片。
-请遵从以下规则判断这两个表格是同一个表格的不同部分，还是两个独立的表格。
-1. 检查两个表格是否都有表头
-- 如果都有，检查它们表头的列名是否一致
-- 如果左侧表格有表头，右侧表格没有，那么它们很有可能是同一个表格的不同部分
-- 如果都没有，则按以下规则继续判断
-2. 检查两个表格的列数，列宽是否一致
-3. 检查左侧表格末尾序号和右侧表格起始序号是否连贯
-4. 检查两个表格的内容是否有衔接性
-最后按照以下格式输出，1表示是同一个表格的不同部分，0表示是独立的表格：
-```json
-{{
+template_for_table_firstrow_comparison = '''
+你是一个表格分析专家，你将看到一张包含两个表格的图像。
+你的任务是严格基于【判断规则】对比两个表格的首行表头是否完全相同。
+【判断规则】
+1.你只需判断两个表格首行表头是否完全一致，不需要考虑其他行。
+2.必须基于图像内容进行直接对比，禁止解释、推理或扩展含义。
+3.你必须特别注意表格是否存在多级表头
+【输出要求】
+请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+- 如果完全一致，输出：
+{
+    "firstrow_are_equal": true
+}
+- 如果不一致，输出：
+{
+    "firstrow_are_equal": false
+}
+'''
+
+template_for_table_serial_and_continuity_check = '''
+你是一个表格分析专家，你将看到一张含有两个表格的图片。
+你的任务是严格逐步执行【判断步骤】，禁止跳步。
+【判断步骤】
+1.序号连贯性检查
+a.如果两个表格都有序号，执行以下步骤：
+    i. 提取左表格内最后一个序号（记为 left_last）和右表格内第一个序号（记为 right_first）。
+    - 注意，不要将标题或表名的编号误认为是表格内的序号
+    ii. 将 left_last 和 right_first 按照以下的“版本号比较”规则进行解析与比较：
+    - 将每个序号以点（.）分割成多个部分，每个部分转换为整数。
+    - 从前到后逐段比较：
+    - 若某一段左 < 右 → 整体左 < 右 → 视为连贯
+    - 若某一段左 > 右 → 不连贯
+    - 若相等，继续比较下一段
+    - 如果所有已有的段都相等，则较短的序号视为“更小”（例如 2.3 < 2.3.1）
+    - 示例：
+    - 2.3 vs 2.4 → 2==2, 3<4 → 连贯
+    - 2.6 vs 2.6.1 → 前两段相等，左更短 → 左 < 右 → 连贯
+    - 2.3.1 vs 2.4 → 2==2, 3<4 → 连贯
+    - 3 vs 2.99 → 3>2 → 不连贯
+    iii. 如果按上述规则比较得到 left_last < right_first → 输出 {"type": 1} 并立即结束
+    iv. 否则（即 left_last >= right_first）→ 输出 {"type": 0} 并立即结束
+b.如果至少有一个表格没有序号 → 进入第 2 步
+2.内容衔接性判断
+注意：内容连续仅指在阅读顺序上表格行内容明显延续，不允许仅凭“主题相关/设备相同”判断。
+a.如果表格中内容连续 → 输出 {"type": 1}
+b.如果表格中内容不连续 → 输出 {"type": 0}
+【输出要求】
+请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+{
     "type": 1
-}}
-```
-"""
+}
+或
+{
+    "type": 0
+}
+'''
+
 
 def image_to_base64_from_path(image_path):
     with open(image_path, "rb") as image_file:
@@ -129,7 +191,7 @@ def vl_chat_from_path(image_path, prompt):
                 ]
             }
         ],
-        temperature=0.2,
+        temperature=0.4,
     )
     return response.choices[0].message.content
 
@@ -154,22 +216,27 @@ def vl_chat(base64_image, prompt):
                 ]
             }
         ],
-        temperature=0.2,
+        temperature=0.4,
     )
     return response.choices[0].message.content
 
-def parse_json(content: str):
+def parse_json(content: str) -> dict:
     try:
         start = content.rfind("{")
+        if start == -1:
+            raise ValueError("No '{' found in content")
+
         end = content.rfind("}")
-        if start != -1 and end != -1:
-            json_string = content[start: end+1]
-            json_data = json.loads(s=json_string)
-            return json_data
-        else:
-            raise Exception('parse json error!\n')
+        if end == -1:
+            raise ValueError("No '}' found after last '{'")
+
+        json_string = content[start:end+1]
+
+        return json.loads(json_string)
+
     except Exception as e:
-        print(e)
+        print(f"parse json error: {e}\ncontent: {content}")
+        return None
 
 def clear_graph(url: str, auth: tuple):
     with GraphDatabase.driver(url, auth=auth) as driver:
@@ -514,7 +581,25 @@ def merge_images_horizonally(image1,image2):
 
     return merged_image
 
-def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
+def extract_table_name(item, bboxs, reader, pdf_path):
+    """裁剪表格图像并调用模型识别表名，返回更新后的 item"""
+    table_images = crop_images_from_pdfreader(reader, bboxs[-1:], mode=0)
+    table_image = table_images[-1]
+    # plt.imshow(table_image)
+    # plt.axis('off')
+    # plt.show()
+    base64_image = image_to_base64_from_pil(table_image)
+    content = vl_chat(base64_image,prompt=template_for_tablename_extraction.format(item['table_body']))
+    print('tablename_extraction\n大模型回答：\n',content)
+    json_res = parse_json(content)
+    print('识别表名为:',json_res['name'])
+    item['table_id'] = str(uuid.uuid4())
+    item['pdf_path'] = pdf_path
+    item['table_caption'] = json_res['name']
+    item['bbox'] = bboxs[-1][1]
+    return item
+
+def process_tables(content_list_path,middle_json_path,pdf_path):
     with open(content_list_path, 'r', encoding='utf-8') as f:
         content_list_data = json.load(f)
     with open(middle_json_path, 'r', encoding='utf-8') as f:
@@ -529,81 +614,86 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
     item_idx = 0
     for item in content_list_data:
         print('='*30)
-        print('当前item信息:')
-        print(item)
+        # print('当前item信息:')
+        # print(item)
         page_idx = item['page_idx']
         if page_idx_now != page_idx:
             page_idx_now = page_idx
             item_idx = 0 
         if item["type"] == "table": 
             idx_data.append((page_idx,item_idx))
-            print('当前idx_data信息:')
-            print(idx_data)
+            # print('当前idx_data信息:')
+            # print(idx_data)
             if pending_table: 
                 print('pending_table不为空.')
                 print('截取pdf中表格.')
                 bboxs = get_bboxs(middle_data, idx_data[-2:])
                 table_images = crop_images_from_pdfreader(reader, bboxs, mode=1)
-                # for image in table_images:
-                #     plt.imshow(image)
-                #     plt.axis('off')
-                #     plt.show()
                 print('合并表格.')
                 merge_image = merge_images_horizonally(table_images[0], table_images[1])
                 plt.imshow(merge_image)
                 plt.axis('off')
                 plt.show()
                 base64_image = image_to_base64_from_pil(merge_image)
-                content = vl_chat(base64_image,prompt=template_for_table_recognize)
-                print('大模型回答：\n',content)
-                json_res = parse_json(content)
-                if json_res['type'] == 1:
-                    item['table_id'] = str(uuid.uuid4())
-                    item['pdf_path'] = pdf_path
-                    item['bbox'] = bboxs[-1][1]
-                    pending_table.append(item)
-                elif json_res['type'] == 0:
-                    tables_list.append(pending_table)
-                    pending_table = None
+                content = vl_chat(base64_image,prompt=template_for_table_firstrow_classification)
+                print('table_firstrow_classification\n大模型回答：\n',content)
+                classify_res = parse_json(content)
+                if classify_res['both_are_headers']:
+                    content = vl_chat(base64_image,prompt=template_for_table_firstrow_comparison)
+                    print('table_firstrow_comparison\n大模型回答：\n',content)
+                    firstrow_comparison_res = parse_json(content)
 
-                    table_images = crop_images_from_pdfreader(reader, bboxs[-1:],mode=0)
-                    table_image = table_images[-1]
-                    # plt.imshow(table_image)
-                    # plt.axis('off')
-                    # plt.show()
-                    base64_image = image_to_base64_from_pil(table_image)
-                    content = vl_chat(base64_image,prompt=template_for_tablename_compare.format(item['table_body'],key_word))
-                    print('大模型回答：\n',content)
-                    json_res = parse_json(content)
-                    if json_res['name']:
-                        print('识别表名为:',json_res['name'])
+                    if firstrow_comparison_res['firstrow_are_equal']:
+                        content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
+                        print('table_serial_and_continuity_check\n大模型回答：\n',content)
+                        check_res = parse_json(content)
+                        if check_res['type'] == 1:
+                            item['table_id'] = str(uuid.uuid4())
+                            item['pdf_path'] = pdf_path
+                            item['table_caption'] = ""
+                            item['bbox'] = bboxs[-1][1]
+                            pending_table.append(item)
+                        elif check_res['type'] == 0:
+                            tables_list.append(pending_table)
+                            pending_table = None
+                            
+                            item = extract_table_name(item,bboxs,reader,pdf_path)
+                            pending_table = [item]
+                            
+                    else:
+                        tables_list.append(pending_table)
+                        pending_table = None
+                        
+                        item = extract_table_name(item,bboxs,reader,pdf_path)
+                        pending_table = [item]
+
+                else:
+                    content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
+                    print('table_serial_and_continuity_check\n大模型回答：\n',content)
+                    check_res = parse_json(content)
+                    if check_res['type'] == 1:
                         item['table_id'] = str(uuid.uuid4())
                         item['pdf_path'] = pdf_path
-                        item['table_caption'] = json_res['name']
+                        item['table_caption'] = ""
                         item['bbox'] = bboxs[-1][1]
+                        pending_table.append(item)
+                    elif check_res['type'] == 0:
+                        tables_list.append(pending_table)
+                        pending_table = None
+                        
+                        item = extract_table_name(item,bboxs,reader,pdf_path)
                         pending_table = [item]
+
+
             else:
                 print('pending_table为空.')
                 bboxs = get_bboxs(middle_data, idx_data[-1:])
-                table_images = crop_images_from_pdfreader(reader, bboxs[-1:], mode=0)
-                table_image = table_images[-1]
-                # plt.imshow(table_image)
-                # plt.axis('off')
-                # plt.show()
-                base64_image = image_to_base64_from_pil(table_image)
-                content = vl_chat(base64_image,prompt=template_for_tablename_compare.format(item['table_body'],key_word))
-                print('大模型回答：\n',content)
-                json_res = parse_json(content)
-                if json_res['name']:
-                    print('识别表名为:',json_res['name'])
-                    bbox = bboxs[-1][1]
-                    item['table_id'] = str(uuid.uuid4())
-                    item['pdf_path'] = pdf_path
-                    item['table_caption'] = json_res['name']
-                    item['bbox'] = bbox
-                    pending_table = [item]
-        print('当前pending_table信息:')
-        print(pending_table)
+
+                item = extract_table_name(item,bboxs,reader,pdf_path)
+                pending_table = [item]
+                
+        # print('当前pending_table信息:')
+        # print(pending_table)
         item_idx += 1
 
     if pending_table:
@@ -612,13 +702,18 @@ def process_tables(content_list_path,middle_json_path,pdf_path,key_word):
     return tables_list
 
 def process_ocr_data(json_path, middle_json_path, pdf_path, key_word):
-    tables_list = process_tables(json_path,middle_json_path,pdf_path,key_word=key_word)
+    tables_list = process_tables(json_path,middle_json_path,pdf_path)
     for tables in tables_list:
         create_nodes(NEO4J_URI, NEO4J_AUTH,table_data=tables)
+        embedding_flag = False
         for i, table in enumerate(tables):
             table_id = table['table_id']
-            if i == 0:
-                table_caption = table['table_caption']
+            table_caption = table['table_caption']
+            if i < len(tables) - 1:
+                create_relationship(NEO4J_URI, NEO4J_AUTH, table_id, tables[i+1]['table_id'])
+            if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
+                embedding_flag = True
+            if embedding_flag:
                 caption_embedding = embedding_by_api(table_caption)[0]
                 caption_data = {
                     'table_id':table_id,
@@ -627,23 +722,21 @@ def process_ocr_data(json_path, middle_json_path, pdf_path, key_word):
                     'dense':caption_embedding
                 }
                 insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',caption_data)
-            if i < len(tables) - 1:
-                create_relationship(NEO4J_URI, NEO4J_AUTH, table_id, tables[i+1]['table_id'])
-            table_body = table['table_body']
-            rows = html_to_rows(table_body)
-            chunked_rows = chunk_rows(rows)
-            markdown_chunks = convert_chunks_to_markdown(chunked_rows)
-            embeddings = embedding_by_api(markdown_chunks)
-            data = []
-            for idx, chunk in enumerate(markdown_chunks):
-                item = {
-                    'table_id':table_id,
-                    'type': 'content',
-                    'document':chunk,
-                    'dense':embeddings[idx]
-                }
-                data.append(item)
-            insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
+                table_body = table['table_body']
+                rows = html_to_rows(table_body)
+                chunked_rows = chunk_rows(rows)
+                markdown_chunks = convert_chunks_to_markdown(chunked_rows)
+                embeddings = embedding_by_api(markdown_chunks)
+                data = []
+                for idx, chunk in enumerate(markdown_chunks):
+                    item = {
+                        'table_id':table_id,
+                        'type': 'content',
+                        'document':chunk,
+                        'dense':embeddings[idx]
+                    }
+                    data.append(item)
+                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
 
 def search_by_text(input, doc_type='caption', top_k=1):
     embeddings = embedding_by_api(input)
@@ -679,7 +772,7 @@ if __name__ == "__main__":
         './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
         './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
         './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
-        key_word=['工程概况一览表']
+        key_word='工程概况一览表'
     )
     # input = ['工程概况一览表']
     # result = search_by_text(input,'caption')
@@ -768,7 +861,7 @@ if __name__ == "__main__":
     #         plt.axis('off')
     #         plt.show()
     #         base64_image = image_to_base64_from_pil(table_image)
-    #         content = vl_chat(base64_image,prompt=template_for_tablename_compare.format(item['table_body'],caption_list))
+    #         content = vl_chat(base64_image,prompt=template_for_tablename_extraction.format(item['table_body'],caption_list))
     #         print('大模型回答：\n',content)
     #         json_res = parse_json(content)
     #         if json_res['name']:
