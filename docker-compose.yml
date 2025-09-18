@@ -1,6 +1,36 @@
 version: '3.5'
 
 services:
+  neo4j:
+    image: neo4j:community
+    container_name: neo4j
+    ports:
+      - "18801:7474"
+      - "18802:7687"
+    volumes:
+      - /home/stellar/neo4j/data:/data
+      - /home/stellar/neo4j/logs:/logs
+      - /home/stellar/neo4j/import:/import
+      - /home/stellar/neo4j/plugins:/plugins
+    environment:
+      # 认证配置
+      NEO4J_AUTH: neo4j/12345678
+
+      # 内存配置
+      NEO4J_dbms_memory_pagecache_size: 1G
+      NEO4J_dbms_memory_heap_initial__size: 1G
+      NEO4J_dbms_memory_heap_max__size: 1G
+
+      # 时区配置
+      NEO4J_db_temporal_timezone: Asia/Shanghai
+
+      # APOC插件配置 - 新增部分
+      NEO4J_PLUGINS: '["apoc"]'  # 自动安装APOC插件
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*  # 允许APOC执行所有操作
+      NEO4J_apoc_export_file_enabled: "true"  # 启用文件导出
+      NEO4J_apoc_import_file_enabled: "true"  # 启用文件导入
+      NEO4J_apoc_import_file_use_neo4j_config: "true"  # 使用Neo4j配置的导入路径
+
   etcd:
     container_name: milvus-etcd
     image: quay.io/coreos/etcd:v3.5.18
@@ -60,6 +90,16 @@ services:
     depends_on:
       - "etcd"
       - "minio"
+
+  attu:
+    container_name: attu
+    image: zilliz/attu:v2.5
+    ports:
+      - "8001:3000"  # 将宿主机8001映射到容器内3000（Attu默认端口）
+    environment:
+      MILVUS_URL: http://standalone:19530  # Milvus服务名为standalone
+    depends_on:
+      - "standalone"  # 确保Milvus先启动（如果在同一compose文件中）
 
 networks:
   default:

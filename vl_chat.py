@@ -18,7 +18,7 @@ from PyPDF2 import PdfReader, PdfWriter
 import tempfile
 from PIL import Image
 
-NEO4J_URI = "neo4j://localhost://7474"
+NEO4J_URI = "bolt://localhost:18802"
 NEO4J_AUTH = ("neo4j", "12345678")
 MILVUS_URI = "http://localhost:19530"
 MILVUS_DB_NAME = 'default'
@@ -80,12 +80,15 @@ template_for_table_firstrow_classification = '''
 '''
 
 template_for_table_firstrow_comparison = '''
-你是一个表格分析专家，你将看到一张包含两个表格的图像。
-你的任务是严格基于【判断规则】对比两个表格的首行表头是否完全相同。
-【判断规则】
-1.你只需判断两个表格首行表头是否完全一致，不需要考虑其他行。
-2.必须基于图像内容进行直接对比，禁止解释、推理或扩展含义。
-3.你必须特别注意表格是否存在多级表头
+你是一个表格结构分析专家，你将看到一张包含两个表格的图像。
+你的任务是严格按【判断过程】对比两个表格的表头的内容和结构是否完全一致
+【判断过程】
+1.提取第一个表格的表头：
+请特别注意表格是否存在多级表头，父级表头单元格的水平跨度（宽度）决定了其子级表头的范围，即父表头下方、且在其水平跨度范围内的所有表头单元格，均为其子表头。
+输出第一个表格的表头内容。
+2.提取第二个表格的表头：
+以同样方式输出第二个表格的表头内容，格式与第一个表格一致。
+3.对比两个表格的表头的内容和结构是否完全一致
 【输出要求】
 请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
 - 如果完全一致，输出：
@@ -191,7 +194,7 @@ def vl_chat_from_path(image_path, prompt):
                 ]
             }
         ],
-        temperature=0.4,
+        temperature=0.1,
     )
     return response.choices[0].message.content
 
@@ -216,7 +219,7 @@ def vl_chat(base64_image, prompt):
                 ]
             }
         ],
-        temperature=0.4,
+        temperature=0.1,
     )
     return response.choices[0].message.content
 
@@ -248,7 +251,7 @@ def clear_graph(url: str, auth: tuple):
             database_="neo4j",
         )
 
-def create_nodes(url: str, auth: tuple, table_data: list):
+def create_nodes(url: str, auth: tuple, table_data: list, serial_idx: int):
     with GraphDatabase.driver(url, auth=auth) as driver:
         driver.verify_connectivity()
         driver.execute_query("""
@@ -258,10 +261,12 @@ def create_nodes(url: str, auth: tuple, table_data: list):
                 table_caption: table.table_caption,
                 page_idx: table.page_idx,
                 pdf_path: table.pdf_path,
-                bbox: table.bbox
+                bbox: table.bbox,
+                serial_idx: $serial_idx
             })
             """,
             table_data=table_data,
+            serial_idx=serial_idx,
             database_="neo4j",
         )
 
@@ -281,12 +286,27 @@ def search_nodes(url: str, auth: tuple, table_id: str):
     with GraphDatabase.driver(url, auth=auth) as driver:
         driver.verify_connectivity()
         result = driver.execute_query("""
-            MATCH (n:Table {table_id: $table_id})
-            OPTIONAL MATCH (n)-[:NEXT*1..]-(related)
-            WITH collect(DISTINCT n) + collect(DISTINCT related) AS allTables
-            UNWIND allTables AS t
-            ORDER BY size(t.table_caption) > 0 DESC, t.page_idx ASC
-            RETURN t
+            MATCH (anchor:Table {table_id: $table_id})
+            WITH anchor.serial_idx AS target_serial_idx
+            MATCH (t:Table {serial_idx: target_serial_idx})
+            WITH t, target_serial_idx
+            CALL apoc.path.subgraphNodes(t, {
+                relationshipFilter: "NEXT",
+                minLevel: 0,
+                maxLevel: -1,
+                filterStartNode: true
+            }) YIELD node AS connectedNode
+            WITH target_serial_idx, t, collect(DISTINCT connectedNode) AS componentNodes
+            WITH target_serial_idx, 
+                 componentNodes,
+                 apoc.coll.sortNodes(componentNodes, 'table_id')[0] AS representative
+            WITH DISTINCT representative, componentNodes
+            UNWIND componentNodes AS nodeInComponent
+            WITH representative, nodeInComponent
+            ORDER BY size(nodeInComponent.table_caption) > 0 DESC, nodeInComponent.page_idx ASC
+            WITH representative, collect(nodeInComponent) AS sortedComponent
+            RETURN sortedComponent
+            ORDER BY size(sortedComponent[0].table_caption) > 0 DESC, sortedComponent[0].page_idx ASC
             """,
             table_id=table_id,
             database_="neo4j",
@@ -703,17 +723,17 @@ def process_tables(content_list_path,middle_json_path,pdf_path):
 
 def process_ocr_data(json_path, middle_json_path, pdf_path, key_word):
     tables_list = process_tables(json_path,middle_json_path,pdf_path)
+    serial_idx = 0
     for tables in tables_list:
-        create_nodes(NEO4J_URI, NEO4J_AUTH,table_data=tables)
-        embedding_flag = False
+        if key_word.replace(' ','') in tables[0]['table_caption'].replace(' ',''):
+            serial_idx += 1
+        create_nodes(NEO4J_URI, NEO4J_AUTH,table_data=tables,serial_idx=serial_idx)
         for i, table in enumerate(tables):
             table_id = table['table_id']
             table_caption = table['table_caption']
             if i < len(tables) - 1:
                 create_relationship(NEO4J_URI, NEO4J_AUTH, table_id, tables[i+1]['table_id'])
             if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
-                embedding_flag = True
-            if embedding_flag:
                 caption_embedding = embedding_by_api(table_caption)[0]
                 caption_data = {
                     'table_id':table_id,
@@ -737,6 +757,7 @@ def process_ocr_data(json_path, middle_json_path, pdf_path, key_word):
                     }
                     data.append(item)
                 insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
+        
 
 def search_by_text(input, doc_type='caption', top_k=1):
     embeddings = embedding_by_api(input)
@@ -782,6 +803,9 @@ if __name__ == "__main__":
     #         plt.axis('off')
     #         plt.show()
 
+    # nodes = search_nodes(NEO4J_URI,NEO4J_AUTH,'5fbabf3c-0c2d-4400-a500-9c92325a9105')[0]
+    # for j, node in enumerate(nodes):
+    #     print(node)
 
     # content_list_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_content_list.json'
     # middle_json_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_middle.json'
@@ -876,7 +900,3 @@ if __name__ == "__main__":
     #             res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',embeddings[0],'caption',top_k=50000)
     #             print(res)
     #     item_idx += 1
-
-    # embeddings = embedding_by_api(['供货范围及设备技术规格一览表'])
-    # res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',embeddings,'caption',top_k=50000)
-    # print(res)
