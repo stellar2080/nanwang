@@ -46,60 +46,60 @@ template_for_tablename_extraction = """
 }}
 """
 
-template_for_table_firstrow_classification = '''
-你是一个表格分析专家，你将看到一张包含两个表格的图像。
-你的任务是根据【判断规则】分别判断两个表格的首行是否为列名行
-【判断规则】
-1.如果表格有标题，不要把标题误认为是首行内容
-2.只能根据首行原始文本进行判断，禁止解释、拆解、补充或推理首行内容含义
-3.列名行：用于标识表格列含义的标题行，通常包含以下类型的词语：
-    - 示例：序号、名称、项目、参数、数量、单位、条件、备注、类型、值、类别
-    - 示例完整行：
-      - "序号 | 名称 | 数量"
-      - "参数 | 单位 | 正常使用条件 | 特殊使用条件"
-      - "项目 | 类型 | 备注"
-4.非列名行：不是列标题，而是数据行、说明行或数值行，通常不具备抽象的列标题性质。
-    - 示例：序号值、具体值、数字、时间、公司名、设备型号，而不是抽象的列概念
-    - 示例完整行：
-      - "1.1 | 电动机 | 2台"
-      - "2.3.1 |实操培训时长（天）|10|10"
-      - "环境温度 | 25℃"
-      - "2024年7月 | XX公司"
-5.强制规则：
-    - 如果首行第一个单元格是具体的编号值（例如纯数字、罗马数字、带小数点的序号，如“1”“1.1”“1.2.3.4”“一”），则必定为非列名行。
-【输出要求】
-请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
-- 如果两个表格的首行都是列名行:
-{
-    "both_are_headers": true
-}
-- 如果至少有一个表格首行不是列名行，输出:
-{
-    "both_are_headers": false
-}
-'''
+# template_for_table_firstrow_classification = '''
+# 你是一个表格分析专家，你将看到一张包含两个表格的图像。
+# 你的任务是根据【判断规则】分别判断两个表格的首行是否为列名行
+# 【判断规则】
+# 1.如果表格有标题，不要把标题误认为是首行内容
+# 2.只能根据首行原始文本进行判断，禁止解释、拆解、补充或推理首行内容含义
+# 3.列名行：用于标识表格列含义的标题行，通常包含以下类型的词语：
+#     - 示例：序号、名称、项目、参数、数量、单位、条件、备注、类型、值、类别
+#     - 示例完整行：
+#       - "序号 | 名称 | 数量"
+#       - "参数 | 单位 | 正常使用条件 | 特殊使用条件"
+#       - "项目 | 类型 | 备注"
+# 4.非列名行：不是列标题，而是数据行、说明行或数值行，通常不具备抽象的列标题性质。
+#     - 示例：序号值、具体值、数字、时间、公司名、设备型号，而不是抽象的列概念
+#     - 示例完整行：
+#       - "1.1 | 电动机 | 2台"
+#       - "2.3.1 |实操培训时长（天）|10|10"
+#       - "环境温度 | 25℃"
+#       - "2024年7月 | XX公司"
+# 5.强制规则：
+#     - 如果首行第一个单元格是具体的编号值（例如纯数字、罗马数字、带小数点的序号，如“1”“1.1”“1.2.3.4”“一”），则必定为非列名行。
+# 【输出要求】
+# 请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+# - 如果两个表格的首行都是列名行:
+# {
+#     "both_are_headers": true
+# }
+# - 如果至少有一个表格首行不是列名行，输出:
+# {
+#     "both_are_headers": false
+# }
+# '''
 
-template_for_table_firstrow_comparison = '''
-你是一个表格结构分析专家，你将看到一张包含两个表格的图像。
-你的任务是严格按【判断过程】对比两个表格的表头的内容和结构是否完全一致
-【判断过程】
-1.提取第一个表格的表头：
-请特别注意表格是否存在多级表头，父级表头单元格的水平跨度（宽度）决定了其子级表头的范围，即父表头下方、且在其水平跨度范围内的所有表头单元格，均为其子表头。
-输出第一个表格的表头内容。
-2.提取第二个表格的表头：
-以同样方式输出第二个表格的表头内容，格式与第一个表格一致。
-3.对比两个表格的表头的内容和结构是否完全一致
-【输出要求】
-请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
-- 如果完全一致，输出：
-{
-    "firstrow_are_equal": true
-}
-- 如果不一致，输出：
-{
-    "firstrow_are_equal": false
-}
-'''
+# template_for_table_firstrow_comparison = '''
+# 你是一个表格结构分析专家，你将看到一张包含两个表格的图像。
+# 你的任务是严格按【判断过程】对比两个表格的表头的内容和结构是否完全一致
+# 【判断过程】
+# 1.提取第一个表格的表头：
+# 请特别注意表格是否存在多级表头，父级表头单元格的水平跨度（宽度）决定了其子级表头的范围，即父表头下方、且在其水平跨度范围内的所有表头单元格，均为其子表头。
+# 输出第一个表格的表头内容。
+# 2.提取第二个表格的表头：
+# 以同样方式输出第二个表格的表头内容，格式与第一个表格一致。
+# 3.对比两个表格的表头的内容和结构是否完全一致
+# 【输出要求】
+# 请逐步输出判断过程，中间判断过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+# - 如果完全一致，输出：
+# {
+#     "firstrow_are_equal": true
+# }
+# - 如果不一致，输出：
+# {
+#     "firstrow_are_equal": false
+# }
+# '''
 
 template_for_table_serial_and_continuity_check = '''
 你是一个表格分析专家，你将看到一张含有两个表格的图片。
@@ -282,31 +282,22 @@ def create_relationship(url: str, auth: tuple, table_id_1: str, table_id_2: str)
             database_="neo4j",
         )
 
-def search_nodes(url: str, auth: tuple, table_id: str):
+def search_chains(url: str, auth: tuple, table_id: str):
     with GraphDatabase.driver(url, auth=auth) as driver:
         driver.verify_connectivity()
         result = driver.execute_query("""
-            MATCH (anchor:Table {table_id: $table_id})
-            WITH anchor.serial_idx AS target_serial_idx
-            MATCH (t:Table {serial_idx: target_serial_idx})
-            WITH t, target_serial_idx
-            CALL apoc.path.subgraphNodes(t, {
-                relationshipFilter: "NEXT",
-                minLevel: 0,
-                maxLevel: -1,
-                filterStartNode: true
-            }) YIELD node AS connectedNode
-            WITH target_serial_idx, t, collect(DISTINCT connectedNode) AS componentNodes
-            WITH target_serial_idx, 
-                 componentNodes,
-                 apoc.coll.sortNodes(componentNodes, 'table_id')[0] AS representative
-            WITH DISTINCT representative, componentNodes
-            UNWIND componentNodes AS nodeInComponent
-            WITH representative, nodeInComponent
-            ORDER BY size(nodeInComponent.table_caption) > 0 DESC, nodeInComponent.page_idx ASC
-            WITH representative, collect(nodeInComponent) AS sortedComponent
-            RETURN sortedComponent
-            ORDER BY size(sortedComponent[0].table_caption) > 0 DESC, sortedComponent[0].page_idx ASC
+            MATCH (start:Table {table_id: $table_id})
+            WITH start.serial_idx AS serial_idx
+
+            MATCH (n:Table {serial_idx: serial_idx})
+
+            MATCH (n)-[:NEXT*0..]-(m:Table {serial_idx: serial_idx})
+            WITH n, collect(elementId(m)) AS ids
+
+            WITH n, apoc.coll.min(ids) AS componentId
+
+            ORDER BY componentId, size(n.table_caption) > 0 DESC, n.page_idx ASC
+            RETURN componentId, collect(n) AS chain
             """,
             table_id=table_id,
             database_="neo4j",
@@ -655,54 +646,71 @@ def process_tables(content_list_path,middle_json_path,pdf_path):
                 plt.axis('off')
                 plt.show()
                 base64_image = image_to_base64_from_pil(merge_image)
-                content = vl_chat(base64_image,prompt=template_for_table_firstrow_classification)
-                print('table_firstrow_classification\n大模型回答：\n',content)
-                classify_res = parse_json(content)
-                if classify_res['both_are_headers']:
-                    content = vl_chat(base64_image,prompt=template_for_table_firstrow_comparison)
-                    print('table_firstrow_comparison\n大模型回答：\n',content)
-                    firstrow_comparison_res = parse_json(content)
 
-                    if firstrow_comparison_res['firstrow_are_equal']:
-                        content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
-                        print('table_serial_and_continuity_check\n大模型回答：\n',content)
-                        check_res = parse_json(content)
-                        if check_res['type'] == 1:
-                            item['table_id'] = str(uuid.uuid4())
-                            item['pdf_path'] = pdf_path
-                            item['table_caption'] = ""
-                            item['bbox'] = bboxs[-1][1]
-                            pending_table.append(item)
-                        elif check_res['type'] == 0:
-                            tables_list.append(pending_table)
-                            pending_table = None
-                            
-                            item = extract_table_name(item,bboxs,reader,pdf_path)
-                            pending_table = [item]
-                            
-                    else:
-                        tables_list.append(pending_table)
-                        pending_table = None
-                        
-                        item = extract_table_name(item,bboxs,reader,pdf_path)
-                        pending_table = [item]
+                content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
+                print('table_serial_and_continuity_check\n大模型回答：\n',content)
+                check_res = parse_json(content)
+                if check_res['type'] == 1:
+                    item['table_id'] = str(uuid.uuid4())
+                    item['pdf_path'] = pdf_path
+                    item['table_caption'] = ""
+                    item['bbox'] = bboxs[-1][1]
+                    pending_table.append(item)
+                elif check_res['type'] == 0:
+                    tables_list.append(pending_table)
+                    pending_table = None
+                    
+                    item = extract_table_name(item,bboxs,reader,pdf_path)
+                    pending_table = [item]
 
-                else:
-                    content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
-                    print('table_serial_and_continuity_check\n大模型回答：\n',content)
-                    check_res = parse_json(content)
-                    if check_res['type'] == 1:
-                        item['table_id'] = str(uuid.uuid4())
-                        item['pdf_path'] = pdf_path
-                        item['table_caption'] = ""
-                        item['bbox'] = bboxs[-1][1]
-                        pending_table.append(item)
-                    elif check_res['type'] == 0:
-                        tables_list.append(pending_table)
-                        pending_table = None
+                # content = vl_chat(base64_image,prompt=template_for_table_firstrow_classification)
+                # print('table_firstrow_classification\n大模型回答：\n',content)
+                # classify_res = parse_json(content)
+                # if classify_res['both_are_headers']:
+                #     content = vl_chat(base64_image,prompt=template_for_table_firstrow_comparison)
+                #     print('table_firstrow_comparison\n大模型回答：\n',content)
+                #     firstrow_comparison_res = parse_json(content)
+
+                #     if firstrow_comparison_res['firstrow_are_equal']:
+                #         content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
+                #         print('table_serial_and_continuity_check\n大模型回答：\n',content)
+                #         check_res = parse_json(content)
+                #         if check_res['type'] == 1:
+                #             item['table_id'] = str(uuid.uuid4())
+                #             item['pdf_path'] = pdf_path
+                #             item['table_caption'] = ""
+                #             item['bbox'] = bboxs[-1][1]
+                #             pending_table.append(item)
+                #         elif check_res['type'] == 0:
+                #             tables_list.append(pending_table)
+                #             pending_table = None
+                            
+                #             item = extract_table_name(item,bboxs,reader,pdf_path)
+                #             pending_table = [item]
+                            
+                #     else:
+                #         tables_list.append(pending_table)
+                #         pending_table = None
                         
-                        item = extract_table_name(item,bboxs,reader,pdf_path)
-                        pending_table = [item]
+                #         item = extract_table_name(item,bboxs,reader,pdf_path)
+                #         pending_table = [item]
+
+                # else:
+                #     content = vl_chat(base64_image,prompt=template_for_table_serial_and_continuity_check)
+                #     print('table_serial_and_continuity_check\n大模型回答：\n',content)
+                #     check_res = parse_json(content)
+                #     if check_res['type'] == 1:
+                #         item['table_id'] = str(uuid.uuid4())
+                #         item['pdf_path'] = pdf_path
+                #         item['table_caption'] = ""
+                #         item['bbox'] = bboxs[-1][1]
+                #         pending_table.append(item)
+                #     elif check_res['type'] == 0:
+                #         tables_list.append(pending_table)
+                #         pending_table = None
+                        
+                #         item = extract_table_name(item,bboxs,reader,pdf_path)
+                #         pending_table = [item]
 
 
             else:
@@ -770,12 +778,12 @@ def search_by_text(input, doc_type='caption', top_k=1):
         print('输入：\n',input[i])
         print('向量数据库检索结果：\n',item)
         print('检索知识图谱...')
-        nodes = search_nodes(NEO4J_URI,NEO4J_AUTH,item[0]['entity']['table_id'])[0]
+        chains = search_chains(NEO4J_URI,NEO4J_AUTH,item[0]['entity']['table_id'])[0]
         bboxs = []
-        for j, node in enumerate(nodes):
-            if j == 0:
-                pdf_path = node["t"]['pdf_path']
-            bboxs.append((node["t"]['page_idx'],node["t"]['bbox']))
+        pdf_path = chains[0]['chain'][0]['pdf_path']
+        for chain in chains:    
+            for node in chain['chain']:
+                bboxs.append((node['page_idx'],node['bbox']))
         print('知识图谱检索结果：')
         print('pdf文件路径：\n',pdf_path)
         print('bbox信息：\n',bboxs)
@@ -786,26 +794,29 @@ def search_by_text(input, doc_type='caption', top_k=1):
     return result
 
 if __name__ == "__main__":
-    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
-    create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
-    clear_graph(NEO4J_URI, NEO4J_AUTH)
-    process_ocr_data(
-        './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
-        './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
-        './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
-        key_word='工程概况一览表'
-    )
-    # input = ['工程概况一览表']
-    # result = search_by_text(input,'caption')
-    # for images in result:
-    #     for image in images:
-    #         plt.imshow(image)
-    #         plt.axis('off')
-    #         plt.show()
+    # drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
+    # create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
+    # clear_graph(NEO4J_URI, NEO4J_AUTH)
+    # process_ocr_data(
+    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
+    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_middle.json',
+    #     './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
+    #     key_word='工程概况一览表'
+    # )
 
-    # nodes = search_nodes(NEO4J_URI,NEO4J_AUTH,'5fbabf3c-0c2d-4400-a500-9c92325a9105')[0]
-    # for j, node in enumerate(nodes):
-    #     print(node)
+    input = ['工程概况一览表']
+    result = search_by_text(input,'caption')
+    for images in result:
+        for image in images:
+            plt.imshow(image)
+            plt.axis('off')
+            plt.show()
+
+    # chains = search_chains(NEO4J_URI,NEO4J_AUTH,'f445c9b9-f807-44c3-b684-f253145d21ca')[0]
+    # for j, chain in enumerate(chains):
+    #     for node in chain['chain']:
+    #         print(node)
+    #     print('='*30)
 
     # content_list_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_content_list.json'
     # middle_json_path = './output/9、500kV组合电器-河南平芝1_投标技术文件_middle.json'
