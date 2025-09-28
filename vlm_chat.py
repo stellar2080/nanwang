@@ -22,7 +22,7 @@ NEO4J_URI = "bolt://localhost:18802"
 NEO4J_AUTH = ("neo4j", "12345678")
 MILVUS_URI = "http://localhost:19530"
 MILVUS_DB_NAME = 'default'
-MAX_TOKENS = 256
+MAX_TOKENS = 512
 SILICONFLOW_API_KEY = 'sk-lfgwvzyqxmwxtomwdqqjbdlvibfdrravglobjhiuvnqnfwyx'
 TONGYI_API_KEY = 'sk-9536a97947b641ad9e287da238ba3abb'
 PDF_DPI = 300
@@ -313,6 +313,45 @@ def count_tokens(text):
     enc = tiktoken.get_encoding("cl100k_base")
     return len(enc.encode(text))
 
+def chunk_html_rows(html_str):
+    soup = BeautifulSoup(html_str, "html.parser")
+    trs = soup.find_all("tr")
+
+    chunks = []
+    i = 0
+    while i < len(trs):
+        group = []
+        token_total = 0
+        added = 0
+
+        for j in range(3):
+            if i + j >= len(trs):
+                break
+            row_html = str(trs[i + j])
+            row_tokens = count_tokens(row_html)
+
+            if token_total + row_tokens <= MAX_TOKENS:
+                group.append(row_html)
+                token_total += row_tokens
+                added += 1
+            else:
+                break
+
+        if group:
+            chunks.append(group)
+
+        # 如果一行都没能加进去，说明这一行本身超过 MAX_TOKENS
+        # 这里我们直接跳过，让它进入“后续处理逻辑”
+        if added == 0:
+            # 这里可改成调用 split_large_cell(row_html) 之类的逻辑
+            # 先把它单独作为一个 chunk 保存
+            chunks.append(str(trs[i]))
+            i += 1
+        else:
+            i += added
+
+    return chunks
+
 def html_to_rows(html_str):
     soup = BeautifulSoup(html_str, "html.parser")
     rows = []
@@ -431,26 +470,32 @@ def drop_collection(uri, db_name, collection_name):
     )
     client.drop_collection(collection_name)
 
-def create_tables_collection(uri, db_name, collection_name):
+def create_tables_collection(uri, db_name, collection_name_1, collection_name_2):
     client = MilvusClient(
         uri=uri,
         token="root:Milvus",
         db_name=db_name
     )
-    schema = MilvusClient.create_schema()
-    schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True)
-    schema.add_field(field_name="table_id", datatype=DataType.VARCHAR, max_length=512)
-    schema.add_field(field_name="type", datatype=DataType.VARCHAR, max_length=512)
-    schema.add_field(field_name="document", datatype=DataType.VARCHAR, max_length=5096)
-    schema.add_field(field_name="dense", datatype=DataType.FLOAT_VECTOR, dim=1024)
+    schema_1 = MilvusClient.create_schema()
+    schema_1.add_field(field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True)
+    schema_1.add_field(field_name="table_id", datatype=DataType.VARCHAR, max_length=512)
+    schema_1.add_field(field_name="pdf_path", datatype=DataType.VARCHAR, max_length=512)
+    schema_1.add_field(field_name="type", datatype=DataType.VARCHAR, max_length=512)
+    schema_1.add_field(field_name="document", datatype=DataType.VARCHAR, max_length=5096)
+    schema_1.add_field(field_name="dense", datatype=DataType.FLOAT_VECTOR, dim=1024)
 
-    index_params = MilvusClient.prepare_index_params()
-    index_params.add_index(
+    index_params_1 = MilvusClient.prepare_index_params()
+    index_params_1.add_index(
         field_name="type", 
         index_type="",
         index_name="type_index",
     )
-    index_params.add_index(
+    index_params_1.add_index(
+        field_name="pdf_path", 
+        index_type="",
+        index_name="pdf_path_index",
+    )
+    index_params_1.add_index(
         field_name="dense", 
         index_type="AUTOINDEX",
         index_name="dense_index",
@@ -458,9 +503,45 @@ def create_tables_collection(uri, db_name, collection_name):
     )
 
     client.create_collection(
-        collection_name=collection_name,
-        schema=schema,
-        index_params=index_params
+        collection_name=collection_name_1,
+        schema=schema_1,
+        index_params=index_params_1
+    )
+
+    schema_2 = MilvusClient.create_schema()
+    schema_2.add_field(field_name="id", datatype=DataType.INT64, is_primary=True, auto_id=True)
+    schema_2.add_field(field_name="table_id", datatype=DataType.VARCHAR, max_length=512)
+    schema_2.add_field(field_name="pdf_path", datatype=DataType.VARCHAR, max_length=512)
+    schema_2.add_field(field_name="type", datatype=DataType.VARCHAR, max_length=512)
+    schema_2.add_field(field_name="document", datatype=DataType.VARCHAR, max_length=5096)
+    schema_2.add_field(
+        field_name="dense",
+        datatype=DataType.FLOAT_VECTOR,
+        dim=2
+    )
+
+    index_params_2 = MilvusClient.prepare_index_params()
+    index_params_2.add_index(
+        field_name="type", 
+        index_type="",
+        index_name="type_index",
+    )
+    index_params_2.add_index(
+        field_name="pdf_path", 
+        index_type="",
+        index_name="pdf_path_index",
+    )
+    index_params_2.add_index(
+        field_name="dense", 
+        index_type="AUTOINDEX",
+        index_name="dense_index",
+        metric_type="COSINE"
+    )
+
+    client.create_collection(
+        collection_name=collection_name_2,
+        schema=schema_2,
+        index_params=index_params_2
     )
 
 def insert_collection(uri, db_name, collection_name, data):
@@ -640,15 +721,80 @@ def truncate_by_tr_from_end(s):
 
     return s
 
-def process_tables(content_list_path,pdf_path):
+# def process_tables(content_list_path,pdf_path):
+#     with open(content_list_path, 'r', encoding='utf-8') as f:
+#         content_list_data = json.load(f)
+#     pdf_path = os.path.abspath(pdf_path)
+#     reader = PdfReader(pdf_path)
+#     tables_list = []
+#     pending_table = None
+#     last_table_idx = -1
+#     for idx, item in enumerate(content_list_data):
+#         print('='*30)
+#         print('当前item信息:')
+#         print(item)
+#         page_idx = item['page_idx']
+#         bbox = item['bbox']
+#         bboxs = [(page_idx, bbox)]
+            
+#         if item["type"] == "table" and 'table_body' in item:
+#             if pending_table: 
+#                 print('pending_table不为空.')
+#                 table_body = item['table_body']
+#                 last_table_body = content_list_data[last_table_idx]['table_body']
+#                 prompt = template_for_header_judge.format(truncate_by_tr(last_table_body),truncate_by_tr(table_body))
+#                 print('template_for_header_judge:\n',prompt)
+#                 content = chat(prompt=prompt)
+#                 print('大模型回答：\n',content)
+#                 judge_res = parse_json(content)
+#                 if judge_res['judge'] == 1:
+#                     prompt = template_for_table_serial_and_continuity_check.format(truncate_by_tr_from_end(last_table_body),truncate_by_tr(table_body))
+#                     print('template_for_table_serial_and_continuity_check:\n',prompt)
+#                     content = chat(prompt=prompt)
+#                     print('大模型回答：\n',content)
+#                     check_res = parse_json(content)
+
+#                     if check_res['check'] == 1:
+#                         item['table_id'] = str(uuid.uuid4())
+#                         item['pdf_path'] = pdf_path
+#                         item['table_caption'] = ""
+#                         item['bbox'] = bbox
+#                         pending_table.append(item)       
+#                     elif check_res['check'] == 0:
+#                         tables_list.append(pending_table)
+#                         pending_table = None
+#                         item = extract_table_name(item,bboxs,reader,pdf_path)
+#                         pending_table = [item]
+
+#                 elif judge_res['judge'] == 0:
+#                     tables_list.append(pending_table)
+#                     pending_table = None
+#                     item = extract_table_name(item,bboxs,reader,pdf_path)
+#                     pending_table = [item]
+
+#             else:
+#                 print('pending_table为空.')
+#                 item = extract_table_name(item,bboxs,reader,pdf_path)
+#                 pending_table = [item]
+
+#             last_table_idx = idx
+                
+#         # print('当前pending_table信息:')
+#         # print(pending_table)
+
+#     if pending_table:
+#         tables_list.append(pending_table)
+   
+#     return tables_list
+
+def process_tables(content_list_path,pdf_path,key_word):
     with open(content_list_path, 'r', encoding='utf-8') as f:
         content_list_data = json.load(f)
     pdf_path = os.path.abspath(pdf_path)
     reader = PdfReader(pdf_path)
-    tables_list = []
-    pending_table = None
-    last_table_idx = -1
-    for idx, item in enumerate(content_list_data):
+    table_list = []
+    head_table_complete_flag = False
+    for item in content_list_data:
         print('='*30)
         print('当前item信息:')
         print(item)
@@ -657,107 +803,104 @@ def process_tables(content_list_path,pdf_path):
         bboxs = [(page_idx, bbox)]
             
         if item["type"] == "table" and 'table_body' in item:
-            if pending_table: 
-                print('pending_table不为空.')
-                table_body = item['table_body']
-                last_table_body = content_list_data[last_table_idx]['table_body']
-                prompt = template_for_header_judge.format(truncate_by_tr(last_table_body),truncate_by_tr(table_body))
-                print('template_for_header_judge:\n',prompt)
-                content = chat(prompt=prompt)
-                print('大模型回答：\n',content)
-                judge_res = parse_json(content)
-                if judge_res['judge'] == 1:
-                    prompt = template_for_table_serial_and_continuity_check.format(truncate_by_tr_from_end(last_table_body),truncate_by_tr(table_body))
-                    print('template_for_table_serial_and_continuity_check:\n',prompt)
-                    content = chat(prompt=prompt)
-                    print('大模型回答：\n',content)
-                    check_res = parse_json(content)
-
-                    if check_res['check'] == 1:
-                        item['table_id'] = str(uuid.uuid4())
-                        item['pdf_path'] = pdf_path
-                        item['table_caption'] = ""
-                        item['bbox'] = bbox
-                        pending_table.append(item)       
-                    elif check_res['check'] == 0:
-                        tables_list.append(pending_table)
-                        pending_table = None
-                        item = extract_table_name(item,bboxs,reader,pdf_path)
-                        pending_table = [item]
-
-                elif judge_res['judge'] == 0:
-                    tables_list.append(pending_table)
-                    pending_table = None
-                    item = extract_table_name(item,bboxs,reader,pdf_path)
-                    pending_table = [item]
-
-            else:
-                print('pending_table为空.')
+            
+            if not head_table_complete_flag:
                 item = extract_table_name(item,bboxs,reader,pdf_path)
-                pending_table = [item]
+                table_caption = item['table_caption']
+                if key_word.replace(' ','') in table_caption.replace(' ',''):
+                    print('识别到：',key_word)
+                    item['table_id'] = str(uuid.uuid4())
+                    table_list.append(item)
+                    head_table_complete_flag = True
+            else:
+                item['table_id'] = str(uuid.uuid4())
+                table_list.append(item)
 
-            last_table_idx = idx
-                
-        # print('当前pending_table信息:')
-        # print(pending_table)
+    return table_list
 
-    if pending_table:
-        tables_list.append(pending_table)
-   
-    return tables_list
+# def process_ocr_data(content_list_path, pdf_path, key_word):
+#     tables_list = process_tables(content_list_path,pdf_path,key_word)
+#     for tables in tables_list:
+#         for i, table in enumerate(tables):
+#             table_id = table['table_id']
+#             table_caption = table['table_caption']
+#             if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
+#                 caption_embedding = embedding_by_api(table_caption)[0]
+#                 caption_data = {
+#                     'table_id':table_id,
+#                     'type': 'caption',
+#                     'document':str(table_caption),
+#                     'dense':caption_embedding
+#                 }
+#                 insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',caption_data)
+#                 table_body = table['table_body']
+#                 rows = html_to_rows(table_body)
+#                 chunked_rows = chunk_rows(rows)
+#                 markdown_chunks = convert_chunks_to_markdown(chunked_rows)
+#                 embeddings = embedding_by_api(markdown_chunks)
+#                 data = []
+#                 for idx, chunk in enumerate(markdown_chunks):
+#                     item = {
+#                         'table_id':table_id,
+#                         'type': 'content',
+#                         'document':chunk,
+#                         'dense':embeddings[idx]
+#                     }
+#                     data.append(item)
+#                 insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
+
+def process_table_body(pdf_path, table, with_embedding=True):
+    table_id = table['table_id']
+    table_body = table['table_body']
+    rows = html_to_rows(table_body)
+    chunked_rows = chunk_rows(rows)
+    markdown_chunks = convert_chunks_to_markdown(chunked_rows)
+    
+    data = []
+    if with_embedding:
+        embeddings = embedding_by_api(markdown_chunks)
+        for idx, chunk in enumerate(markdown_chunks):
+            data.append({
+                'table_id': table_id,
+                'type': 'content',
+                'pdf_path': pdf_path,
+                'document': chunk,
+                'dense': embeddings[idx]
+            })
+        insert_collection(MILVUS_URI, MILVUS_DB_NAME, 'table_with_emb', data)
+    else:
+        for chunk in markdown_chunks:
+            data.append({
+                'table_id': table_id,
+                'type': 'content',
+                'pdf_path': pdf_path,
+                'document': chunk,
+                'dense': [1.0,0.0]
+            })
+        insert_collection(MILVUS_URI, MILVUS_DB_NAME, 'table_no_emb', data)
 
 def process_ocr_data(content_list_path, pdf_path, key_word):
-    tables_list = process_tables(content_list_path,pdf_path)
-    for tables in tables_list:
-        for i, table in enumerate(tables):
-            table_id = table['table_id']
-            table_caption = table['table_caption']
-            if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
-                caption_embedding = embedding_by_api(table_caption)[0]
-                caption_data = {
-                    'table_id':table_id,
-                    'type': 'caption',
-                    'document':str(table_caption),
-                    'dense':caption_embedding
-                }
-                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',caption_data)
-                table_body = table['table_body']
-                rows = html_to_rows(table_body)
-                chunked_rows = chunk_rows(rows)
-                markdown_chunks = convert_chunks_to_markdown(chunked_rows)
-                embeddings = embedding_by_api(markdown_chunks)
-                data = []
-                for idx, chunk in enumerate(markdown_chunks):
-                    item = {
-                        'table_id':table_id,
-                        'type': 'content',
-                        'document':chunk,
-                        'dense':embeddings[idx]
-                    }
-                    data.append(item)
-                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
-            else:
-                caption_data = {
-                    'table_id':table_id,
-                    'type': 'caption',
-                    'document':str(table_caption)
-                }
-                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',caption_data)
-                table_body = table['table_body']
-                rows = html_to_rows(table_body)
-                chunked_rows = chunk_rows(rows)
-                markdown_chunks = convert_chunks_to_markdown(chunked_rows)
-                embeddings = embedding_by_api(markdown_chunks)
-                data = []
-                for idx, chunk in enumerate(markdown_chunks):
-                    item = {
-                        'table_id':table_id,
-                        'type': 'content',
-                        'document':chunk,
-                        'dense':embeddings[idx]
-                    }
-                    data.append(item)
-                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
+    table_list = process_tables(content_list_path,pdf_path,key_word)
+    for i, table in enumerate(table_list):
+        print(table)
+        table_id = table['table_id']
+        table_caption = table['table_caption']
+        if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
+            caption_embedding = embedding_by_api(table_caption)[0]
+            caption_data = {
+                'table_id':table_id,
+                'type': 'caption',
+                'pdf_path': pdf_path,
+                'document':str(table_caption),
+                'dense':caption_embedding
+            }
+            insert_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb',caption_data)
+            process_table_body(pdf_path, table, with_embedding=True)
+        elif i == 1:
+            process_table_body(pdf_path, table, with_embedding=True)
+        else:
+            process_table_body(pdf_path, table, with_embedding=False)
+
         
 
 def search_by_text(input, doc_type='caption', top_k=1):
@@ -787,9 +930,9 @@ def search_by_text(input, doc_type='caption', top_k=1):
     return result
 
 if __name__ == "__main__":
-    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
-    create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'tables')
-    clear_graph(NEO4J_URI, NEO4J_AUTH)
+    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb')
+    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'table_no_emb')
+    create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb','table_no_emb')
     process_ocr_data(
         './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
         './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
