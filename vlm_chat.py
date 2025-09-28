@@ -106,10 +106,15 @@ a.如果两个表格都有明确的序号列，执行以下步骤：
     iii. 如果按上述规则比较得到 left_last < right_first → 输出 {{"check": 1}} 并立即结束
     iv. 否则（即 left_last >= right_first）→ 输出 {{"check": 0}} 并立即结束
 b.如果至少有一个表格没有明确的序号列 → 进入第 2 步
-2.内容衔接性判断
-注意：内容连续仅指在阅读顺序上表格行内容明显延续，不允许仅凭“主题相关/设备相同”判断。
-a.如果表格中内容连续 → 输出 {{"check": 1}}
-b.如果表格中内容不连续 → 输出 {{"check": 0}}
+2. 内容连续性判断
+你需要按以下规则判断两个表格的内容是否连续：
+- 内容连续是指两个表格在阅读顺序上属于同一部分，后一个表格延续、补充或并列展开前一个表格的内容。
+- 可以通过以下线索判断为连续：
+   1) 后一个表格继续了前一个表格的小节、主题，或在同一章节下展开另一个并列小节。
+   2) 内容明显属于同一大类或同一小节的不同方面（如同一章下不同系统、不同工艺要求）。
+判断规则：
+a. 如果表格中内容连续 → 输出 {{"check": 1}}
+b. 如果表格中内容不连续 → 输出 {{"check": 0}}
 【输出要求】
 请逐步输出分析过程，中间分析过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
 {{
@@ -254,7 +259,7 @@ def clear_graph(url: str, auth: tuple):
             database_="neo4j",
         )
 
-def create_nodes(url: str, auth: tuple, table_data: list, serial_idx: int):
+def create_nodes(url: str, auth: tuple, table_data: list):
     with GraphDatabase.driver(url, auth=auth) as driver:
         driver.verify_connectivity()
         driver.execute_query("""
@@ -264,12 +269,9 @@ def create_nodes(url: str, auth: tuple, table_data: list, serial_idx: int):
                 table_caption: table.table_caption,
                 page_idx: table.page_idx,
                 pdf_path: table.pdf_path,
-                bbox: table.bbox,
-                serial_idx: $serial_idx
             })
             """,
             table_data=table_data,
-            serial_idx=serial_idx,
             database_="neo4j",
         )
 
@@ -591,9 +593,9 @@ def merge_images_horizonally(image1,image2):
 def extract_table_name(item, bboxs, reader, pdf_path):
     """裁剪表格图像并调用模型识别表名，返回更新后的 item"""
     table_image = crop_images_from_pdfreader(reader, bboxs, mode=0)[0]
-    plt.imshow(table_image)
-    plt.axis('off')
-    plt.show()
+    # plt.imshow(table_image)
+    # plt.axis('off')
+    # plt.show()
     base64_image = image_to_base64_from_pil(table_image)
     content = vl_chat(base64_image,prompt=template_for_tablename_extraction.format(item['table_body']))
     print('tablename_extraction\n大模型回答：\n',content)
@@ -706,16 +708,10 @@ def process_tables(content_list_path,pdf_path):
 
 def process_ocr_data(content_list_path, pdf_path, key_word):
     tables_list = process_tables(content_list_path,pdf_path)
-    serial_idx = 0
     for tables in tables_list:
-        if key_word.replace(' ','') in tables[0]['table_caption'].replace(' ',''):
-            serial_idx += 1
-        create_nodes(NEO4J_URI, NEO4J_AUTH,table_data=tables,serial_idx=serial_idx)
         for i, table in enumerate(tables):
             table_id = table['table_id']
             table_caption = table['table_caption']
-            if i < len(tables) - 1:
-                create_relationship(NEO4J_URI, NEO4J_AUTH, table_id, tables[i+1]['table_id'])
             if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
                 caption_embedding = embedding_by_api(table_caption)[0]
                 caption_data = {
@@ -723,6 +719,28 @@ def process_ocr_data(content_list_path, pdf_path, key_word):
                     'type': 'caption',
                     'document':str(table_caption),
                     'dense':caption_embedding
+                }
+                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',caption_data)
+                table_body = table['table_body']
+                rows = html_to_rows(table_body)
+                chunked_rows = chunk_rows(rows)
+                markdown_chunks = convert_chunks_to_markdown(chunked_rows)
+                embeddings = embedding_by_api(markdown_chunks)
+                data = []
+                for idx, chunk in enumerate(markdown_chunks):
+                    item = {
+                        'table_id':table_id,
+                        'type': 'content',
+                        'document':chunk,
+                        'dense':embeddings[idx]
+                    }
+                    data.append(item)
+                insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',data)
+            else:
+                caption_data = {
+                    'table_id':table_id,
+                    'type': 'caption',
+                    'document':str(table_caption)
                 }
                 insert_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',caption_data)
                 table_body = table['table_body']
