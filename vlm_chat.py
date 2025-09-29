@@ -18,11 +18,13 @@ from PyPDF2 import PdfReader, PdfWriter
 import tempfile
 from PIL import Image
 
+from collections import OrderedDict
+
 NEO4J_URI = "bolt://localhost:18802"
 NEO4J_AUTH = ("neo4j", "12345678")
 MILVUS_URI = "http://localhost:19530"
 MILVUS_DB_NAME = 'default'
-MAX_TOKENS = 512
+MAX_TOKENS = 256
 SILICONFLOW_API_KEY = 'sk-lfgwvzyqxmwxtomwdqqjbdlvibfdrravglobjhiuvnqnfwyx'
 TONGYI_API_KEY = 'sk-9536a97947b641ad9e287da238ba3abb'
 PDF_DPI = 300
@@ -46,144 +48,144 @@ template_for_tablename_extraction = """
 }}
 """
 
-template_for_header_judge = '''
-你是一个表格分析专家，你将看到两个以HTML格式提供的表格内容。
-你的任务是严格逐步执行【分析步骤】，禁止跳步。
-【表格内容】
-第一个表格：
-{}
-第二个表格：
-{}
-【分析步骤】
-1.判断两个表格是否含有表头
-以下是表头行和非表头行的特征：
-   - 表头行：用于标识表格列含义的标题行，通常包含以下类型的词语：序号、名称、项目、参数、数量、单位、条件、备注、类型、值、类别  
-   - 非表头行：不是列标题，而是数据行、说明行或数值行，例如：
-       - "1.1 | 电动机 | 2台"
-       - "2.3.1 | 实操培训时长（天）| 10 | 10"
-       - "环境温度 | 25℃"   
-       - "2024年7月 | XX公司"
-a.如果都有表头 → 进入第 2 步
-b.如果至少一个表格没有表头，输出 {{"judge": 1}} 并立即结束
-2.对比两个表格的表头内容与结构是否完全一致
-a.如果一致，输出 {{"judge": 1}} 并立即结束
-b.如果不一致，输出 {{"judge": 0}} 并立即结束
-【输出要求】
-请逐步输出分析过程，中间分析过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
-{{
-    "judge": 1
-}}
-或
-{{
-    "judge": 0
-}}
-'''
+# template_for_header_judge = '''
+# 你是一个表格分析专家，你将看到两个以HTML格式提供的表格内容。
+# 你的任务是严格逐步执行【分析步骤】，禁止跳步。
+# 【表格内容】
+# 第一个表格：
+# {}
+# 第二个表格：
+# {}
+# 【分析步骤】
+# 1.判断两个表格是否含有表头
+# 以下是表头行和非表头行的特征：
+#    - 表头行：用于标识表格列含义的标题行，通常包含以下类型的词语：序号、名称、项目、参数、数量、单位、条件、备注、类型、值、类别  
+#    - 非表头行：不是列标题，而是数据行、说明行或数值行，例如：
+#        - "1.1 | 电动机 | 2台"
+#        - "2.3.1 | 实操培训时长（天）| 10 | 10"
+#        - "环境温度 | 25℃"   
+#        - "2024年7月 | XX公司"
+# a.如果都有表头 → 进入第 2 步
+# b.如果至少一个表格没有表头，输出 {{"judge": 1}} 并立即结束
+# 2.对比两个表格的表头内容与结构是否完全一致
+# a.如果一致，输出 {{"judge": 1}} 并立即结束
+# b.如果不一致，输出 {{"judge": 0}} 并立即结束
+# 【输出要求】
+# 请逐步输出分析过程，中间分析过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+# {{
+#     "judge": 1
+# }}
+# 或
+# {{
+#     "judge": 0
+# }}
+# '''
 
-template_for_table_serial_and_continuity_check = '''
-你是一个表格分析专家，你将看到两个以HTML格式提供的表格内容。
-你的任务是严格逐步执行【分析步骤】，禁止跳步。
-【表格内容】
-第一个表格：
-{}
-第二个表格：
-{}
-【分析步骤】
-1.序号列连贯性检查
-a.如果两个表格都有明确的序号列，执行以下步骤：
-    i. 提取第一个表格序号列的最后一个序号（记为 left_last）和第二个表格序号列的第一个序号（记为 right_first）。
-    ii. 将 left_last 和 right_first 按照以下的“版本号比较”规则进行解析与比较：
-    - 将每个序号以点（.）分割成多个部分，每个部分转换为整数。
-    - 从前到后逐段比较：
-    - 若某一段左 < 右 → 整体左 < 右 → 视为连贯
-    - 若某一段左 > 右 → 不连贯
-    - 若相等，继续比较下一段
-    - 如果所有已有的段都相等，则较短的序号视为“更小”（例如 2.3 < 2.3.1）
-    - 示例：
-    - 2.3 vs 2.4 → 2==2, 3<4 → 连贯
-    - 2.6 vs 2.6.1 → 前两段相等，左更短 → 左 < 右 → 连贯
-    - 2.3.1 vs 2.4 → 2==2, 3<4 → 连贯
-    - 3 vs 2.99 → 3>2 → 不连贯
-    iii. 如果按上述规则比较得到 left_last < right_first → 输出 {{"check": 1}} 并立即结束
-    iv. 否则（即 left_last >= right_first）→ 输出 {{"check": 0}} 并立即结束
-b.如果至少有一个表格没有明确的序号列 → 进入第 2 步
-2. 内容连续性判断
-你需要按以下规则判断两个表格的内容是否连续：
-- 内容连续是指两个表格在阅读顺序上属于同一部分，后一个表格延续、补充或并列展开前一个表格的内容。
-- 可以通过以下线索判断为连续：
-   1) 后一个表格继续了前一个表格的小节、主题，或在同一章节下展开另一个并列小节。
-   2) 内容明显属于同一大类或同一小节的不同方面（如同一章下不同系统、不同工艺要求）。
-判断规则：
-a. 如果表格中内容连续 → 输出 {{"check": 1}}
-b. 如果表格中内容不连续 → 输出 {{"check": 0}}
-【输出要求】
-请逐步输出分析过程，中间分析过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
-{{
-    "check": 1
-}}
-或
-{{
-    "check": 0
-}}
-'''
+# template_for_table_serial_and_continuity_check = '''
+# 你是一个表格分析专家，你将看到两个以HTML格式提供的表格内容。
+# 你的任务是严格逐步执行【分析步骤】，禁止跳步。
+# 【表格内容】
+# 第一个表格：
+# {}
+# 第二个表格：
+# {}
+# 【分析步骤】
+# 1.序号列连贯性检查
+# a.如果两个表格都有明确的序号列，执行以下步骤：
+#     i. 提取第一个表格序号列的最后一个序号（记为 left_last）和第二个表格序号列的第一个序号（记为 right_first）。
+#     ii. 将 left_last 和 right_first 按照以下的“版本号比较”规则进行解析与比较：
+#     - 将每个序号以点（.）分割成多个部分，每个部分转换为整数。
+#     - 从前到后逐段比较：
+#     - 若某一段左 < 右 → 整体左 < 右 → 视为连贯
+#     - 若某一段左 > 右 → 不连贯
+#     - 若相等，继续比较下一段
+#     - 如果所有已有的段都相等，则较短的序号视为“更小”（例如 2.3 < 2.3.1）
+#     - 示例：
+#     - 2.3 vs 2.4 → 2==2, 3<4 → 连贯
+#     - 2.6 vs 2.6.1 → 前两段相等，左更短 → 左 < 右 → 连贯
+#     - 2.3.1 vs 2.4 → 2==2, 3<4 → 连贯
+#     - 3 vs 2.99 → 3>2 → 不连贯
+#     iii. 如果按上述规则比较得到 left_last < right_first → 输出 {{"check": 1}} 并立即结束
+#     iv. 否则（即 left_last >= right_first）→ 输出 {{"check": 0}} 并立即结束
+# b.如果至少有一个表格没有明确的序号列 → 进入第 2 步
+# 2. 内容连续性判断
+# 你需要按以下规则判断两个表格的内容是否连续：
+# - 内容连续是指两个表格在阅读顺序上属于同一部分，后一个表格延续、补充或并列展开前一个表格的内容。
+# - 可以通过以下线索判断为连续：
+#    1) 后一个表格继续了前一个表格的小节、主题，或在同一章节下展开另一个并列小节。
+#    2) 内容明显属于同一大类或同一小节的不同方面（如同一章下不同系统、不同工艺要求）。
+# 判断规则：
+# a. 如果表格中内容连续 → 输出 {{"check": 1}}
+# b. 如果表格中内容不连续 → 输出 {{"check": 0}}
+# 【输出要求】
+# 请逐步输出分析过程，中间分析过程请用自然语言描述，最终判断结果必须单独按以下格式输出：
+# {{
+#     "check": 1
+# }}
+# 或
+# {{
+#     "check": 0
+# }}
+# '''
 
 
-def image_to_base64_from_path(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+# def image_to_base64_from_path(image_path):
+#     with open(image_path, "rb") as image_file:
+#         return base64.b64encode(image_file.read()).decode('utf-8')
 
 def image_to_base64_from_pil(image):
     buffered = BytesIO()
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-def pdf_to_base64_images_by_batch(reader: PdfReader, start_page=0, end_page=None, batch_size=30):
-    total_pages = len(reader.pages)
-    if end_page is None:
-        end_page = total_pages
-    base64_images = []
+# def pdf_to_base64_images_by_batch(reader: PdfReader, start_page=0, end_page=None, batch_size=30):
+#     total_pages = len(reader.pages)
+#     if end_page is None:
+#         end_page = total_pages
+#     base64_images = []
 
-    for i in range(start_page, end_page, batch_size):
-        batch_writer = PdfWriter()
+#     for i in range(start_page, end_page, batch_size):
+#         batch_writer = PdfWriter()
 
-        for j in range(i, min(i + batch_size, end_page)):
-            batch_writer.add_page(reader.pages[j])
+#         for j in range(i, min(i + batch_size, end_page)):
+#             batch_writer.add_page(reader.pages[j])
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
-            batch_writer.write(tmp_pdf)
-            tmp_pdf_path = tmp_pdf.name
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+#             batch_writer.write(tmp_pdf)
+#             tmp_pdf_path = tmp_pdf.name
 
-        images = convert_from_path(tmp_pdf_path,dpi=PDF_DPI)
-        for img in images:
-            base64_images.append(image_to_base64_from_pil(img))
+#         images = convert_from_path(tmp_pdf_path,dpi=PDF_DPI)
+#         for img in images:
+#             base64_images.append(image_to_base64_from_pil(img))
 
-        os.remove(tmp_pdf_path)
+#         os.remove(tmp_pdf_path)
 
-    return base64_images
+#     return base64_images
 
-def vl_chat_from_path(image_path, prompt):
-    client = OpenAI(
-        api_key=TONGYI_API_KEY,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
-    response = client.chat.completions.create(
-        model="qwen2.5-vl-72b-instruct",  
-        messages=[
-            {
-                "role": "user","content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_to_base64_from_path(image_path)}"}
-                    },
-                    {
-                        "type": "text", 
-                        "text": prompt
-                    },
-                ]
-            }
-        ],
-        temperature=0.1,
-    )
-    return response.choices[0].message.content
+# def vl_chat_from_path(image_path, prompt):
+#     client = OpenAI(
+#         api_key=TONGYI_API_KEY,
+#         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+#     )
+#     response = client.chat.completions.create(
+#         model="qwen2.5-vl-72b-instruct",  
+#         messages=[
+#             {
+#                 "role": "user","content": [
+#                     {
+#                         "type": "image_url",
+#                         "image_url": {"url": f"data:image/jpeg;base64,{image_to_base64_from_path(image_path)}"}
+#                     },
+#                     {
+#                         "type": "text", 
+#                         "text": prompt
+#                     },
+#                 ]
+#             }
+#         ],
+#         temperature=0.1,
+#     )
+#     return response.choices[0].message.content
 
 def vl_chat(base64_image, prompt):
     client = OpenAI(
@@ -210,26 +212,26 @@ def vl_chat(base64_image, prompt):
     )
     return response.choices[0].message.content
 
-def chat(prompt):
-    client = OpenAI(
-        api_key=TONGYI_API_KEY,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
-    response = client.chat.completions.create(
-        model="qwen2.5-vl-72b-instruct",  
-        messages=[
-            {
-                "role": "user","content": [
-                    {
-                        "type": "text", 
-                        "text": prompt
-                    },
-                ]
-            }
-        ],
-        temperature=0.1,
-    )
-    return response.choices[0].message.content
+# def chat(prompt):
+#     client = OpenAI(
+#         api_key=TONGYI_API_KEY,
+#         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+#     )
+#     response = client.chat.completions.create(
+#         model="qwen2.5-vl-72b-instruct",  
+#         messages=[
+#             {
+#                 "role": "user","content": [
+#                     {
+#                         "type": "text", 
+#                         "text": prompt
+#                     },
+#                 ]
+#             }
+#         ],
+#         temperature=0.1,
+#     )
+#     return response.choices[0].message.content
 
 def parse_json(content: str) -> dict:
     try:
@@ -249,78 +251,78 @@ def parse_json(content: str) -> dict:
         print(f"parse json error: {e}\ncontent: {content}")
         return None
 
-def clear_graph(url: str, auth: tuple):
-    with GraphDatabase.driver(url, auth=auth) as driver:
-        driver.verify_connectivity()
-        driver.execute_query("""
-            MATCH (p)
-            DETACH DELETE p
-            """,
-            database_="neo4j",
-        )
+# def clear_graph(url: str, auth: tuple):
+#     with GraphDatabase.driver(url, auth=auth) as driver:
+#         driver.verify_connectivity()
+#         driver.execute_query("""
+#             MATCH (p)
+#             DETACH DELETE p
+#             """,
+#             database_="neo4j",
+#         )
 
-def create_nodes(url: str, auth: tuple, table_data: list):
-    with GraphDatabase.driver(url, auth=auth) as driver:
-        driver.verify_connectivity()
-        driver.execute_query("""
-            UNWIND $table_data AS table
-            CREATE (n:Table {
-                table_id: table.table_id, 
-                table_caption: table.table_caption,
-                page_idx: table.page_idx,
-                pdf_path: table.pdf_path,
-            })
-            """,
-            table_data=table_data,
-            database_="neo4j",
-        )
+# def create_nodes(url: str, auth: tuple, table_data: list):
+#     with GraphDatabase.driver(url, auth=auth) as driver:
+#         driver.verify_connectivity()
+#         driver.execute_query("""
+#             UNWIND $table_data AS table
+#             CREATE (n:Table {
+#                 table_id: table.table_id, 
+#                 table_caption: table.table_caption,
+#                 page_idx: table.page_idx,
+#                 pdf_path: table.pdf_path,
+#             })
+#             """,
+#             table_data=table_data,
+#             database_="neo4j",
+#         )
 
-def create_relationship(url: str, auth: tuple, table_id_1: str, table_id_2: str):
-    with GraphDatabase.driver(url, auth=auth) as driver:
-        driver.verify_connectivity()
-        driver.execute_query("""
-            MATCH(a:Table {table_id: $table_id_1}), (b:Table {table_id: $table_id_2})
-            CREATE (a)-[:NEXT]->(b)
-            """,
-            table_id_1=table_id_1,
-            table_id_2=table_id_2,
-            database_="neo4j",
-        )
+# def create_relationship(url: str, auth: tuple, table_id_1: str, table_id_2: str):
+#     with GraphDatabase.driver(url, auth=auth) as driver:
+#         driver.verify_connectivity()
+#         driver.execute_query("""
+#             MATCH(a:Table {table_id: $table_id_1}), (b:Table {table_id: $table_id_2})
+#             CREATE (a)-[:NEXT]->(b)
+#             """,
+#             table_id_1=table_id_1,
+#             table_id_2=table_id_2,
+#             database_="neo4j",
+#         )
 
-def search_chains(url: str, auth: tuple, table_id: str):
-    with GraphDatabase.driver(url, auth=auth) as driver:
-        driver.verify_connectivity()
-        result = driver.execute_query("""
-            MATCH (start:Table {table_id: $table_id})
-            WITH start.serial_idx AS serial_idx
+# def search_chains(url: str, auth: tuple, table_id: str):
+#     with GraphDatabase.driver(url, auth=auth) as driver:
+#         driver.verify_connectivity()
+#         result = driver.execute_query("""
+#             MATCH (start:Table {table_id: $table_id})
+#             WITH start.serial_idx AS serial_idx
 
-            MATCH (n:Table {serial_idx: serial_idx})
+#             MATCH (n:Table {serial_idx: serial_idx})
 
-            MATCH (n)-[:NEXT*0..]-(m:Table {serial_idx: serial_idx})
-            WITH n, collect(elementId(m)) AS ids
+#             MATCH (n)-[:NEXT*0..]-(m:Table {serial_idx: serial_idx})
+#             WITH n, collect(elementId(m)) AS ids
 
-            WITH n, apoc.coll.min(ids) AS componentId
+#             WITH n, apoc.coll.min(ids) AS componentId
 
-            ORDER BY componentId, size(n.table_caption) > 0 DESC, n.page_idx ASC
-            RETURN componentId, collect(n) AS chain
-            """,
-            table_id=table_id,
-            database_="neo4j",
-        )
-    return result
+#             ORDER BY componentId, size(n.table_caption) > 0 DESC, n.page_idx ASC
+#             RETURN componentId, collect(n) AS chain
+#             """,
+#             table_id=table_id,
+#             database_="neo4j",
+#         )
+#     return result
 
 def count_tokens(text):
     enc = tiktoken.get_encoding("cl100k_base")
     return len(enc.encode(text))
 
-def chunk_html_rows(html_str):
+def chunk_html_rows(html_str, max_tokens):
     soup = BeautifulSoup(html_str, "html.parser")
     trs = soup.find_all("tr")
 
     chunks = []
     i = 0
     while i < len(trs):
-        group = []
+        chunk = ""
         token_total = 0
         added = 0
 
@@ -330,21 +332,17 @@ def chunk_html_rows(html_str):
             row_html = str(trs[i + j])
             row_tokens = count_tokens(row_html)
 
-            if token_total + row_tokens <= MAX_TOKENS:
-                group.append(row_html)
+            if token_total + row_tokens <= max_tokens:
+                chunk += row_html
                 token_total += row_tokens
                 added += 1
             else:
                 break
 
-        if group:
-            chunks.append(group)
+        if chunk != "":
+            chunks.append(chunk)
 
-        # 如果一行都没能加进去，说明这一行本身超过 MAX_TOKENS
-        # 这里我们直接跳过，让它进入“后续处理逻辑”
         if added == 0:
-            # 这里可改成调用 split_large_cell(row_html) 之类的逻辑
-            # 先把它单独作为一个 chunk 保存
             chunks.append(str(trs[i]))
             i += 1
         else:
@@ -352,115 +350,116 @@ def chunk_html_rows(html_str):
 
     return chunks
 
-def html_to_rows(html_str):
-    soup = BeautifulSoup(html_str, "html.parser")
-    rows = []
-    for tr in soup.find_all("tr"):
-        cells = [td.get_text(strip=True).replace("\n", " ") for td in tr.find_all("td")]
-        rows.append(cells)
-    return rows
 
-def format_markdown_row(cells):
-    return "| " + " | ".join(cells) + " |"
+# def html_to_rows(html_str):
+#     soup = BeautifulSoup(html_str, "html.parser")
+#     rows = []
+#     for tr in soup.find_all("tr"):
+#         cells = [td.get_text(strip=True).replace("\n", " ") for td in tr.find_all("td")]
+#         rows.append(cells)
+#     return rows
 
-def split_large_cell(cell):
-    parts = re.split(r'(?<=[；。])|(?<=\d\）)', cell)
-    parts = [p.strip() for p in parts if p.strip()]
+# def format_markdown_row(cells):
+#     return "| " + " | ".join(cells) + " |"
+
+# def split_large_cell(cell):
+#     parts = re.split(r'(?<=[；。])|(?<=\d\）)', cell)
+#     parts = [p.strip() for p in parts if p.strip()]
     
-    chunks = []
-    current = []
+#     chunks = []
+#     current = []
     
-    for part in parts:
-        current.append(part)
-        token_count = count_tokens(" ".join(current))
-        if token_count > MAX_TOKENS:
-            current.pop()
-            if current:
-                chunks.append("".join(current))
-            if count_tokens(part) > MAX_TOKENS:
-                chunks.extend(_fallback_split_by_word(part))
-            else:
-                current = [part]
-        else:
-            continue
+#     for part in parts:
+#         current.append(part)
+#         token_count = count_tokens(" ".join(current))
+#         if token_count > MAX_TOKENS:
+#             current.pop()
+#             if current:
+#                 chunks.append("".join(current))
+#             if count_tokens(part) > MAX_TOKENS:
+#                 chunks.extend(_fallback_split_by_word(part))
+#             else:
+#                 current = [part]
+#         else:
+#             continue
 
-    if current:
-        chunks.append("".join(current))
+#     if current:
+#         chunks.append("".join(current))
 
-    return chunks
+#     return chunks
 
-def _fallback_split_by_word(text):
-    words = text.split()
-    chunks = []
-    current = []
-    for word in words:
-        current.append(word)
-        if count_tokens(" ".join(current)) > MAX_TOKENS:
-            current.pop()
-            chunks.append(" ".join(current))
-            current = [word]
-    if current:
-        chunks.append(" ".join(current))
-    return chunks
+# def _fallback_split_by_word(text):
+#     words = text.split()
+#     chunks = []
+#     current = []
+#     for word in words:
+#         current.append(word)
+#         if count_tokens(" ".join(current)) > MAX_TOKENS:
+#             current.pop()
+#             chunks.append(" ".join(current))
+#             current = [word]
+#     if current:
+#         chunks.append(" ".join(current))
+#     return chunks
 
-def chunk_rows(rows):
-    chunks = []
-    i = 0
-    while i < len(rows):
-        group = []
-        token_total = 0
-        added = 0
+# def chunk_rows(rows):
+#     chunks = []
+#     i = 0
+#     while i < len(rows):
+#         group = []
+#         token_total = 0
+#         added = 0
 
-        for j in range(3):
-            if i + j >= len(rows):
-                break
-            row_text = format_markdown_row(rows[i + j])
-            row_tokens = count_tokens(row_text)
-            if token_total + row_tokens <= MAX_TOKENS:
-                group.append(rows[i + j])
-                token_total += row_tokens
-                added += 1
-            else:
-                break
+#         for j in range(3):
+#             if i + j >= len(rows):
+#                 break
+#             row_text = format_markdown_row(rows[i + j])
+#             row_tokens = count_tokens(row_text)
+#             if token_total + row_tokens <= MAX_TOKENS:
+#                 group.append(rows[i + j])
+#                 token_total += row_tokens
+#                 added += 1
+#             else:
+#                 break
 
-        if group:
-            chunks.append(group)
+#         if group:
+#             chunks.append(group)
 
-        if added == 0:
-            row = rows[i]
-            temp_cells = []
-            current_cells = []
-            for cell in row:
-                current_cells.append(cell)
-                row_text = format_markdown_row(current_cells)
-                if count_tokens(row_text) > MAX_TOKENS:
-                    current_cells.pop()
-                    if current_cells:
-                        temp_cells.append(current_cells)
-                    if count_tokens(cell) > MAX_TOKENS:
-                        for split_cell in split_large_cell(cell):
-                            temp_cells.append([split_cell])
-                    current_cells = []
-            if current_cells:
-                temp_cells.append(current_cells)
-            for small_row in temp_cells:
-                chunks.append([small_row])
-            i += 1
-        else:
-            i += added
+#         if added == 0:
+#             row = rows[i]
+#             temp_cells = []
+#             current_cells = []
+#             for cell in row:
+#                 current_cells.append(cell)
+#                 row_text = format_markdown_row(current_cells)
+#                 if count_tokens(row_text) > MAX_TOKENS:
+#                     current_cells.pop()
+#                     if current_cells:
+#                         temp_cells.append(current_cells)
+#                     if count_tokens(cell) > MAX_TOKENS:
+#                         for split_cell in split_large_cell(cell):
+#                             temp_cells.append([split_cell])
+#                     current_cells = []
+#             if current_cells:
+#                 temp_cells.append(current_cells)
+#             for small_row in temp_cells:
+#                 chunks.append([small_row])
+#             i += 1
+#         else:
+#             i += added
 
-    return chunks
+#     return chunks
 
-def convert_chunks_to_markdown(chunks):
-    markdown_list = []
-    for chunk in chunks:
-        max_cols = max(len(r) for r in chunk)
-        md = []
-        for row in chunk:
-            row = row + [""] * (max_cols - len(row))
-            md.append(format_markdown_row(row))
-        markdown_list.append("\n".join(md))
-    return markdown_list
+# def convert_chunks_to_markdown(chunks):
+#     markdown_list = []
+#     for chunk in chunks:
+#         max_cols = max(len(r) for r in chunk)
+#         md = []
+#         for row in chunk:
+#             row = row + [""] * (max_cols - len(row))
+#             md.append(format_markdown_row(row))
+#         markdown_list.append("\n".join(md))
+#     return markdown_list
 
 def drop_collection(uri, db_name, collection_name):
     client = MilvusClient(
@@ -568,11 +567,11 @@ def search_collection(uri, db_name, collection_name, query_vector, filter_type, 
         data=query_vector,
         limit=top_k,
         filter=f'type == "{filter_type}"',
-        output_fields=["table_id", "type", "document"]
+        output_fields=["pdf_path", "table_id", "type", "document"]
     )
     return res
 
-def query_collection(uri, db_name, collection_name, filter_type):
+def query_collection(uri, db_name, collection_name, filter_type, pdf_path):
     client = MilvusClient(
         uri=uri,
         token="root:Milvus",
@@ -580,8 +579,8 @@ def query_collection(uri, db_name, collection_name, filter_type):
     )
     res = client.query(
         collection_name=collection_name,
-        filter=f'type == "{filter_type}"',
-        output_fields=["table_id", "type", "document"]
+        filter=f'type == "{filter_type}" and pdf_path == "{pdf_path}"',
+        output_fields=["pdf_path", "table_id", "type", "document"]
     )
     return res
 
@@ -599,27 +598,27 @@ def embedding_by_api(input):
     embedding_list =  [item['embedding'] for item in response.json()['data']]
     return embedding_list
 
-def embedding_by_local(input):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-large-zh-v1.5')
-    model = AutoModel.from_pretrained('BAAI/bge-large-zh-v1.5').to(device)
-    model.eval()
-    encoded_input = tokenizer(input, padding=True, truncation=True, max_length=512, return_tensors='pt').to(device)
-    with torch.no_grad():
-        model_output = model(**encoded_input)
-        sentence_embeddings = model_output[0][:,0]
-    sentence_embeddings = torch.nn.functional.normalize(sentence_embeddings, p=2, dim=1)
-    return sentence_embeddings.tolist()
+# def embedding_by_local(input):
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     print(f"Using device: {device}")
+#     tokenizer = AutoTokenizer.from_pretrained('BAAI/bge-large-zh-v1.5')
+#     model = AutoModel.from_pretrained('BAAI/bge-large-zh-v1.5').to(device)
+#     model.eval()
+#     encoded_input = tokenizer(input, padding=True, truncation=True, max_length=512, return_tensors='pt').to(device)
+#     with torch.no_grad():
+#         model_output = model(**encoded_input)
+#         sentence_embeddings = model_output[0][:,0]
+#     sentence_embeddings = torch.nn.functional.normalize(sentence_embeddings, p=2, dim=1)
+#     return sentence_embeddings.tolist()
 
-def pad_image_to_height(img, target_height, fill_color=(255, 255, 255)):
-    w, h = img.size
-    if h >= target_height:
-        return img
-    pad_top = (target_height - h) // 2
-    new_img = Image.new(img.mode, (w, target_height), fill_color)
-    new_img.paste(img, (0, pad_top))
-    return new_img
+# def pad_image_to_height(img, target_height, fill_color=(255, 255, 255)):
+#     w, h = img.size
+#     if h >= target_height:
+#         return img
+#     pad_top = (target_height - h) // 2
+#     new_img = Image.new(img.mode, (w, target_height), fill_color)
+#     new_img.paste(img, (0, pad_top))
+#     return new_img
 
 def proc_bbox(bbox: list,image_x_size,mode: int):
     if mode == 0:
@@ -656,20 +655,20 @@ def crop_images_from_pdfreader(reader: PdfReader, bboxs: list, mode: int = 1):
 
     return table_images
 
-def merge_images_horizonally(image1,image2):
-    max_height = max(image1.height, image2.height)
+# def merge_images_horizonally(image1,image2):
+#     max_height = max(image1.height, image2.height)
 
-    if image1.height < max_height:
-        image1 = pad_image_to_height(image1, max_height)
-    if image2.height < max_height:
-        image2 = pad_image_to_height(image2, max_height)
+#     if image1.height < max_height:
+#         image1 = pad_image_to_height(image1, max_height)
+#     if image2.height < max_height:
+#         image2 = pad_image_to_height(image2, max_height)
 
-    total_width = image1.width + image2.width
-    merged_image = Image.new("RGB", (total_width, max_height), (255, 255, 255))
-    merged_image.paste(image1, (0, 0))
-    merged_image.paste(image2, (image1.width, 0))
+#     total_width = image1.width + image2.width
+#     merged_image = Image.new("RGB", (total_width, max_height), (255, 255, 255))
+#     merged_image.paste(image1, (0, 0))
+#     merged_image.paste(image2, (image1.width, 0))
 
-    return merged_image
+#     return merged_image
 
 def extract_table_name(item, bboxs, reader, pdf_path):
     """裁剪表格图像并调用模型识别表名，返回更新后的 item"""
@@ -688,38 +687,38 @@ def extract_table_name(item, bboxs, reader, pdf_path):
     item['bbox'] = bboxs[-1][1]
     return item
 
-def truncate_by_tr(s):
-    target = "</tr>"
-    count = 0
-    start = 0
+# def truncate_by_tr(s):
+#     target = "</tr>"
+#     count = 0
+#     start = 0
 
-    while count < 4:
-        pos = s.find(target, start)
-        if pos == -1:
-            return s
-        count += 1
-        if count == 4:
-            end_pos = pos + len(target)
-            return s[:end_pos]
-        start = pos + len(target)
+#     while count < 4:
+#         pos = s.find(target, start)
+#         if pos == -1:
+#             return s
+#         count += 1
+#         if count == 4:
+#             end_pos = pos + len(target)
+#             return s[:end_pos]
+#         start = pos + len(target)
 
-    return s
+#     return s
 
-def truncate_by_tr_from_end(s):
-    target = "<tr>"
-    count = 0
-    pos = len(s)
+# def truncate_by_tr_from_end(s):
+#     target = "<tr>"
+#     count = 0
+#     pos = len(s)
 
-    while count < 4:
-        found_pos = s.rfind(target, 0, pos)
-        if found_pos == -1:
-            return s
-        count += 1
-        if count == 4:
-            return s[found_pos:]
-        pos = found_pos
+#     while count < 4:
+#         found_pos = s.rfind(target, 0, pos)
+#         if found_pos == -1:
+#             return s
+#         count += 1
+#         if count == 4:
+#             return s[found_pos:]
+#         pos = found_pos
 
-    return s
+#     return s
 
 # def process_tables(content_list_path,pdf_path):
 #     with open(content_list_path, 'r', encoding='utf-8') as f:
@@ -795,9 +794,9 @@ def process_tables(content_list_path,pdf_path,key_word):
     table_list = []
     head_table_complete_flag = False
     for item in content_list_data:
-        print('='*30)
-        print('当前item信息:')
-        print(item)
+        # print('='*30)
+        # print('当前item信息:')
+        # print(item)
         page_idx = item['page_idx']
         bbox = item['bbox']
         bboxs = [(page_idx, bbox)]
@@ -852,14 +851,11 @@ def process_tables(content_list_path,pdf_path,key_word):
 def process_table_body(pdf_path, table, with_embedding=True):
     table_id = table['table_id']
     table_body = table['table_body']
-    rows = html_to_rows(table_body)
-    chunked_rows = chunk_rows(rows)
-    markdown_chunks = convert_chunks_to_markdown(chunked_rows)
-    
     data = []
     if with_embedding:
-        embeddings = embedding_by_api(markdown_chunks)
-        for idx, chunk in enumerate(markdown_chunks):
+        chunks = chunk_html_rows(table_body, max_tokens=256)
+        embeddings = embedding_by_api(chunks)
+        for idx, chunk in enumerate(chunks):
             data.append({
                 'table_id': table_id,
                 'type': 'content',
@@ -869,7 +865,8 @@ def process_table_body(pdf_path, table, with_embedding=True):
             })
         insert_collection(MILVUS_URI, MILVUS_DB_NAME, 'table_with_emb', data)
     else:
-        for chunk in markdown_chunks:
+        chunks = chunk_html_rows(table_body, max_tokens=256)
+        for chunk in chunks:
             data.append({
                 'table_id': table_id,
                 'type': 'content',
@@ -877,12 +874,11 @@ def process_table_body(pdf_path, table, with_embedding=True):
                 'document': chunk,
                 'dense': [1.0,0.0]
             })
-        insert_collection(MILVUS_URI, MILVUS_DB_NAME, 'table_no_emb', data)
+        insert_collection(MILVUS_URI, MILVUS_DB_NAME, 'table_without_emb', data)
 
 def process_ocr_data(content_list_path, pdf_path, key_word):
     table_list = process_tables(content_list_path,pdf_path,key_word)
     for i, table in enumerate(table_list):
-        print(table)
         table_id = table['table_id']
         table_caption = table['table_caption']
         if i == 0 and key_word.replace(' ','') in table_caption.replace(' ',''): # 检查是否是一串表中的第一个表，如工程概况一览表，若是，则进行嵌入
@@ -903,46 +899,81 @@ def process_ocr_data(content_list_path, pdf_path, key_word):
 
         
 
+# def search_by_text(input, doc_type='caption', top_k=1):
+#     embeddings = embedding_by_api(input)
+#     print("完成所有输入的嵌入.")
+#     print('对所有输入，检索向量数据库...')
+#     doc_res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',embeddings,doc_type,top_k)
+#     result = []
+#     for i, item in enumerate(doc_res):
+#         print("="*20)
+#         print('输入：\n',input[i])
+#         print('向量数据库检索结果：\n',item)
+#         print('检索知识图谱...')
+#         chains = search_chains(NEO4J_URI,NEO4J_AUTH,item[0]['entity']['table_id'])[0]
+#         bboxs = []
+#         pdf_path = chains[0]['chain'][0]['pdf_path']
+#         for chain in chains:    
+#             for node in chain['chain']:
+#                 bboxs.append((node['page_idx'],node['bbox']))
+#         print('知识图谱检索结果：')
+#         print('pdf文件路径：\n',pdf_path)
+#         print('bbox信息：\n',bboxs)
+#         pdfreader = PdfReader(pdf_path)
+#         images = crop_images_from_pdfreader(pdfreader, bboxs, mode=1)
+#         result.append(images)
+    
+#     return result
+
+
+def group_and_merge_documents(*lists):
+    grouped_docs = OrderedDict()
+    
+    for data_list in lists:
+        for item in data_list:
+            table_id = item["table_id"]
+            doc = item["document"]
+            
+            if table_id not in grouped_docs:
+                grouped_docs[table_id] = []
+            grouped_docs[table_id].append(doc)
+    
+    result = OrderedDict()
+    for table_id, docs in grouped_docs.items():
+        result[table_id] = "<table>" + "".join(docs) + "</table>"
+    
+    return result
+
 def search_by_text(input, doc_type='caption', top_k=1):
     embeddings = embedding_by_api(input)
     print("完成所有输入的嵌入.")
     print('对所有输入，检索向量数据库...')
-    doc_res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'tables',embeddings,doc_type,top_k)
-    result = []
-    for i, item in enumerate(doc_res):
+    search_res = search_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb',embeddings,doc_type,top_k)
+    for i, item in enumerate(search_res):
         print("="*20)
         print('输入：\n',input[i])
         print('向量数据库检索结果：\n',item)
-        print('检索知识图谱...')
-        chains = search_chains(NEO4J_URI,NEO4J_AUTH,item[0]['entity']['table_id'])[0]
-        bboxs = []
-        pdf_path = chains[0]['chain'][0]['pdf_path']
-        for chain in chains:    
-            for node in chain['chain']:
-                bboxs.append((node['page_idx'],node['bbox']))
-        print('知识图谱检索结果：')
-        print('pdf文件路径：\n',pdf_path)
-        print('bbox信息：\n',bboxs)
-        pdfreader = PdfReader(pdf_path)
-        images = crop_images_from_pdfreader(pdfreader, bboxs, mode=1)
-        result.append(images)
-    
-    return result
+        pdf_path = item[0]['entity']['pdf_path']
+        query_res_1 = query_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb','content',pdf_path)
+        query_res_2 = query_collection(MILVUS_URI,MILVUS_DB_NAME,'table_without_emb','content',pdf_path)
+        result_dict = group_and_merge_documents(query_res_1, query_res_2)
+
+    return result_dict
 
 if __name__ == "__main__":
-    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb')
-    drop_collection(MILVUS_URI,MILVUS_DB_NAME,'table_no_emb')
-    create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb','table_no_emb')
-    process_ocr_data(
-        './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
-        './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
-        key_word='工程概况一览表'
-    )
+    # drop_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb')
+    # drop_collection(MILVUS_URI,MILVUS_DB_NAME,'table_without_emb')
+    # create_tables_collection(MILVUS_URI,MILVUS_DB_NAME,'table_with_emb','table_without_emb')
+    # process_ocr_data(
+    #     './output/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版_content_list.json',
+    #     './pdfs/12、500千伏楚庭站扩建第三台主变工程550kVGIS 技术确认书--盖章版.pdf',
+    #     key_word='工程概况一览表'
+    # )
 
-    # input = ['<html><body><table><tr><td>序号</td><td>名称</td><td>内容</td></tr><tr><td>1</td><td>工程名称</td><td>500千伏楚庭站扩建第三台主变工程</td></tr><tr><td>2</td><td>工程建设单位</td><td>广东电网有限责任公司广州供电局</td></tr><tr><td>3</td><td>工程地址</td><td>广州市番禺区</td></tr><tr><td></td><td>是否为扩建工程（是/否）</td><td>是</td></tr><tr><td></td><td>工程规模</td><td>1×1000MVA</td></tr><tr><td>6</td><td>运输条件</td><td>陆运</td></tr><tr><td>，</td><td>电气主接线</td><td>']
-    # result = search_by_text(input,'content')
-    # for images in result:
-    #     for image in images:
-    #         plt.imshow(image)
-    #         plt.axis('off')
-    #         plt.show()
+    input = ['<table><tr><td>序号</td><td>名称</td><td>内容</td></tr><tr><td>1</td><td>工程名称</td><td>500千伏楚庭站扩建第三台主变工程</td></tr><tr><td>2</td><td>工程建设单位</td><td>广东电网有限责任公司广州供电局</td></tr><tr><td>3</td><td>工程地址</td><td>广州市番禺区</td></tr><tr><td></td><td>是否为扩建工程（是/否）</td><td>是</td></tr><tr><td></td><td>工程规模</td><td>1×1000MVA</td></tr><tr><td>6</td><td>运输条件</td><td>陆运</td></tr><tr><td>，</td><td>电气主接线</td><td>']
+    result_dict = search_by_text(input,'content')
+    for key, doc in result_dict.items():
+        print('='*30)
+        print(key)
+        print('='*10)
+        print(doc)
